@@ -1,0 +1,12 @@
+# Kørsels-afhængigheder til TorsdagBot
+# Installeres med:  python -m pip install -r requirements.txt
+
+# Moderne, vedligeholdt discord.py. 2.5+ kræves for Discords indbyggede polls.
+discord.py>=2.5.0,<3.0.0
+
+# Læser .env-filen ved siden af bot.py / TorsdagBot.exe
+python-dotenv>=1.0.1
+
+# Tidszone-database. Windows har ikke en indbygget IANA-database, så uden
+# denne pakke kan Python ikke slå "Europe/Copenhagen" op.
+tzdata>=2024.1

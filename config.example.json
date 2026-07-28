@@ -1,0 +1,16 @@
+{
+  "_kommentar": "Valgfrit alternativ til .env for alt UNDTAGEN tokenet. Omdøb til config.json og læg filen ved siden af TorsdagBot.exe. Værdier i .env og rigtige miljøvariabler vinder over denne fil. DISCORD_TOKEN læses ALDRIG herfra - det skal stå i .env.",
+  "CHANNEL_ID": 123456789012345678,
+  "OWNER_ID": 234567890123456789,
+  "GUILD_ID": null,
+  "POLL_WEEKDAY": 3,
+  "POLL_HOUR": 15,
+  "POLL_MINUTE": 0,
+  "TIMEZONE": "Europe/Copenhagen",
+  "POLL_MODE": "auto",
+  "POLL_DURATION_HOURS": 8,
+  "CATCH_UP_HOURS": 6,
+  "PING_EVERYONE": true,
+  "TEST_PING_EVERYONE": false,
+  "LOG_LEVEL": "INFO"
+}

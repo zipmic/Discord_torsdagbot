@@ -1,0 +1,22 @@
+# Hemmeligheder og lokale indstillinger - må ALDRIG committes
+.env
+config.json
+
+# Lokale data og logfiler
+poll_state.json
+poll_state.tmp
+poll_state.corrupt.json
+*.log
+*.log.*
+
+# PyInstaller
+build/
+dist/
+*.spec
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
