@@ -2,7 +2,8 @@
 TorsdagBot – automatisk ugentlig Discord-afstemning.
 
 Botten sender hver torsdag kl. 15:00 (Europe/Copenhagen) en afstemning i en
-bestemt kanal med spørgsmålet "Hvornår kommer du online i aften?".
+bestemt kanal: "DET ER TORSDAG! Meld din ankost!!" – med svarmuligheder for,
+hvornår man kommer online om aftenen.
 
 Funktioner:
   * Bruger Discords indbyggede poll-funktion (discord.py >= 2.5) hvis den er
@@ -25,6 +26,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import sys
 from dataclasses import dataclass, field
 from datetime import date, datetime, time as dt_time, timedelta
@@ -154,22 +156,38 @@ class PollOption:
     """Én svarmulighed i afstemningen."""
 
     key: str  # Stabilt id – bruges i custom_id og i state-filen.
-    label: str  # Teksten brugeren ser.
-    emoji: str  # Emoji på knappen / i poll'en.
+    text: str  # Selve teksten.
+    clock: str  # Ur-emoji (unicode) som står forrest i teksten.
+    emoji_env: str = ""  # Valgfri server-emoji, sættes som EMOJI_<NAVN> i .env.
+
+    @property
+    def label(self) -> str:
+        """Teksten på knappen / svarmuligheden i poll'en.
+
+        Ur-emojien står i selve teksten, fordi unicode-emoji altid vises
+        korrekt. Emoji-feltet på knappen bruges i stedet til en valgfri
+        server-emoji (fx :clue:), som kun kan sendes med sit fulde ID.
+        """
+        return f"{self.clock} {self.text}"
 
 
-POLL_QUESTION = "Hvornår kommer du online i aften?"
+POLL_QUESTION = "DET ER TORSDAG! Meld din ankost!!"
 
 POLL_OPTIONS: tuple[PollOption, ...] = (
-    PollOption("t1900", "Kl. 19:00–20:00", "🕖"),
-    PollOption("t2000", "Kl. 20:00–21:00", "🕗"),
-    PollOption("t2100", "Kl. 21:00–22:00", "🕘"),
-    PollOption("nope", "Jeg kommer ikke", "❌"),
+    PollOption("early", "Early Bird kl. 19:00–20:00", "🕖"),
+    PollOption("t2000", "Mellem kl. 20:00–20:30", "🕗"),
+    PollOption("t2030", "Mellem kl. 20:30–21:00", "🕣"),
+    PollOption("e2100", "Efter 21:00 lol", "🕘", "clue"),
+    PollOption("e2200", "Efter 22:00 lol", "🕙", "code"),
+    PollOption("nope", "Jeg kommer ikke", "❌", "codeweiner"),
 )
 
 # Selve beskedteksten. @everyone står i "content", da det er den eneste måde
 # Discord rent faktisk pinger alle på.
-POLL_CONTENT = f"@everyone\n**{POLL_QUESTION}**"
+POLL_CONTENT = f"@everyone {POLL_QUESTION}"
+
+# Server-emojis (fx :clue:) kan kun sendes af en bot i formen <:navn:id>.
+CUSTOM_EMOJI_RE = re.compile(r"^<(a?):([A-Za-z0-9_]{2,32}):(\d{15,25})>$")
 
 # Præfiks til knappernes custom_id. Skal være stabilt på tværs af genstarter,
 # ellers virker persistente Views ikke.
@@ -186,6 +204,43 @@ def option_by_key(key: str) -> Optional[PollOption]:
 def stemme_ord(antal: int) -> str:
     """Dansk ental/flertal for 'stemme'."""
     return "stemme" if antal == 1 else "stemmer"
+
+
+def parse_custom_emoji(raw: str, navn: str) -> Optional[discord.PartialEmoji]:
+    """Fortolk en emoji fra .env.
+
+    Accepterer den fulde Discord-form ``<:clue:123456789012345678>`` (som man
+    får ved at skrive ``\\:clue:`` i Discord) samt almindelige unicode-emoji.
+    Alt andet ignoreres med en advarsel, så en tastefejl ikke forhindrer hele
+    afstemningen i at blive sendt.
+    """
+    raw = raw.strip()
+    if not raw:
+        return None
+
+    match = CUSTOM_EMOJI_RE.match(raw)
+    if match:
+        animeret, emoji_navn, emoji_id = match.groups()
+        return discord.PartialEmoji(
+            name=emoji_navn, id=int(emoji_id), animated=bool(animeret)
+        )
+
+    if raw.startswith(":") and raw.endswith(":"):
+        log.warning(
+            "EMOJI_%s er sat til %s. En bot kan ikke bruge :navn:-formen. "
+            "Skriv \\%s i Discord (med backslash foran), tryk Enter, og kopiér "
+            "den fulde form <:navn:id> ind i .env i stedet.",
+            navn.upper(),
+            raw,
+            raw,
+        )
+        return None
+
+    if len(raw) <= 8:  # Almindelig unicode-emoji, fx 🍺
+        return discord.PartialEmoji(name=raw)
+
+    log.warning("EMOJI_%s (%s) kunne ikke forstås som en emoji – springes over.", navn.upper(), raw)
+    return None
 
 
 # ===========================================================================
@@ -227,6 +282,9 @@ class Config:
     # Skal /testvote pinge @everyone? Standard: nej (teksten er den samme,
     # men selve ping'et undertrykkes, så testen ikke forstyrrer serveren).
     test_ping_everyone: bool = False
+
+    # Valgfrie server-emojis, fx {"clue": "<:clue:123456789012345678>"}.
+    custom_emojis: dict[str, str] = field(default_factory=dict)
 
     log_level: str = "INFO"
 
@@ -337,6 +395,15 @@ def load_config() -> Config:
     if poll_mode not in {"auto", "native", "buttons"}:
         raise ConfigError("POLL_MODE skal være 'auto', 'native' eller 'buttons'.")
 
+    # Valgfrie server-emojis: EMOJI_CLUE, EMOJI_CODE, EMOJI_CODEWEINER ...
+    custom_emojis: dict[str, str] = {}
+    for option in POLL_OPTIONS:
+        if not option.emoji_env:
+            continue
+        værdi = get_raw(f"EMOJI_{option.emoji_env.upper()}")
+        if værdi:
+            custom_emojis[option.emoji_env] = værdi
+
     return Config(
         token=token,
         channel_id=channel_id,
@@ -352,6 +419,7 @@ def load_config() -> Config:
         poll_duration_hours=duration,
         ping_everyone=get_bool("PING_EVERYONE", True),
         test_ping_everyone=get_bool("TEST_PING_EVERYONE", False),
+        custom_emojis=custom_emojis,
         log_level=(get_raw("LOG_LEVEL") or "INFO").upper(),
     )
 
@@ -481,10 +549,18 @@ def count_votes(votes: dict[str, str]) -> dict[str, int]:
     return counts
 
 
-def build_result_embed(votes: dict[str, str]) -> discord.Embed:
-    """Byg embed'en der viser svarmuligheder og antal stemmer."""
+def build_result_embed(
+    votes: dict[str, str],
+    emojis: Optional[dict[str, Optional[discord.PartialEmoji]]] = None,
+) -> discord.Embed:
+    """Byg embed'en der viser svarmuligheder og antal stemmer.
+
+    ``emojis`` er de valgfrie server-emojis pr. svarmulighed. De vises kun her
+    i embed'en, hvor Discord altid gengiver dem korrekt.
+    """
     counts = count_votes(votes)
     total = sum(counts.values())
+    emojis = emojis or {}
 
     lines: list[str] = []
     for option in POLL_OPTIONS:
@@ -492,8 +568,9 @@ def build_result_embed(votes: dict[str, str]) -> discord.Embed:
         andel = (antal / total * 100) if total else 0.0
         fyldt = round(andel / 10)
         bar = "▰" * fyldt + "▱" * (10 - fyldt)
+        ekstra = emojis.get(option.key)
         lines.append(
-            f"{option.emoji}  **{option.label}**\n"
+            f"**{option.label}**{f' {ekstra}' if ekstra else ''}\n"
             f"`{bar}`  {antal} {stemme_ord(antal)} · {andel:.0f}%"
         )
 
@@ -512,12 +589,13 @@ def build_result_embed(votes: dict[str, str]) -> discord.Embed:
 class VoteButton(discord.ui.Button["PollView"]):
     """Én knap i afstemningen. custom_id er statisk, så View'et er persistent."""
 
-    def __init__(self, bot: "TorsdagBot", option: PollOption) -> None:
+    def __init__(self, bot: "TorsdagBot", option: PollOption, row: int = 0) -> None:
         super().__init__(
             label=option.label,
-            emoji=option.emoji,
+            emoji=bot.custom_emoji_for(option),
             style=discord.ButtonStyle.secondary,
             custom_id=f"{CUSTOM_ID_PREFIX}{option.key}",
+            row=row,
         )
         self.bot = bot
         self.option = option
@@ -534,10 +612,14 @@ class PollView(discord.ui.View):
     Stemmerne slås op ud fra beskedens ID i state-filen.
     """
 
+    # Antal knapper pr. række (Discord tillader højst 5).
+    BUTTONS_PER_ROW = 3
+
     def __init__(self, bot: "TorsdagBot") -> None:
         super().__init__(timeout=None)
-        for option in POLL_OPTIONS:
-            self.add_item(VoteButton(bot, option))
+        for index, option in enumerate(POLL_OPTIONS):
+            # Fordel knapperne jævnt på rækker, så de står pænt (3 + 3).
+            self.add_item(VoteButton(bot, option, row=index // self.BUTTONS_PER_ROW))
 
 
 # ===========================================================================
@@ -563,6 +645,7 @@ class TorsdagBot(discord.Client):
         self._send_lock = asyncio.Lock()
         self._retry_not_before: Optional[datetime] = None
         self._ready_logged = False
+        self._emoji_cache: dict[str, Optional[discord.PartialEmoji]] = {}
 
         self._register_commands()
 
@@ -713,6 +796,47 @@ class TorsdagBot(discord.Client):
             log.warning("Tråden #%s er arkiveret – beskeder kan fejle.", channel)
 
     # -- afsendelse af afstemningen ----------------------------------------
+    def custom_emoji_for(self, option: PollOption) -> Optional[discord.PartialEmoji]:
+        """Slå den valgfrie server-emoji op for en svarmulighed.
+
+        Findes emojien ikke på serveren (fx forkert ID i .env), springes den
+        over med en advarsel, så afstemningen stadig kan sendes.
+        """
+        if not option.emoji_env:
+            return None
+        if option.key in self._emoji_cache:
+            return self._emoji_cache[option.key]
+
+        raw = self.config.custom_emojis.get(option.emoji_env)
+        emoji = parse_custom_emoji(raw, option.emoji_env) if raw else None
+
+        if emoji is None or emoji.id is None:
+            # Ikke sat, ugyldig, eller en almindelig unicode-emoji: resultatet
+            # kan ikke ændre sig, så det gemmes med det samme.
+            self._emoji_cache[option.key] = emoji
+            return emoji
+
+        if not self.is_ready():
+            # Serverens emoji-liste er ikke hentet endnu (fx når det persistente
+            # View oprettes i setup_hook). Gem ikke resultatet endnu.
+            return emoji
+
+        if self.get_emoji(emoji.id) is None:
+            log.warning(
+                "Server-emojien %s (EMOJI_%s) blev ikke fundet – botten skal være "
+                "medlem af den server, emojien hører til. Springer den over.",
+                raw,
+                option.emoji_env.upper(),
+            )
+            emoji = None
+
+        self._emoji_cache[option.key] = emoji
+        return emoji
+
+    def option_emojis(self) -> dict[str, Optional[discord.PartialEmoji]]:
+        """Alle valgfrie server-emojis, klar til brug i embed'en."""
+        return {option.key: self.custom_emoji_for(option) for option in POLL_OPTIONS}
+
     def _native_poll_supported(self) -> bool:
         """Understøtter det installerede discord.py Discords indbyggede polls?"""
         return hasattr(discord, "Poll") and hasattr(discord.Poll, "add_answer")
@@ -724,7 +848,8 @@ class TorsdagBot(discord.Client):
             multiple=False,  # Hver person kan kun have ét aktivt svar.
         )
         for option in POLL_OPTIONS:
-            poll.add_answer(text=option.label, emoji=option.emoji)
+            # Ur-emojien ligger i teksten; emoji-feltet bruges til server-emojien.
+            poll.add_answer(text=option.label, emoji=self.custom_emoji_for(option))
         return poll
 
     async def send_poll(self, *, is_test: bool = False) -> discord.Message:
@@ -779,7 +904,7 @@ class TorsdagBot(discord.Client):
             try:
                 message = await channel.send(
                     content=content,
-                    embed=build_result_embed({}),
+                    embed=build_result_embed({}, self.option_emojis()),
                     view=PollView(self),
                     allowed_mentions=allowed,
                 )
@@ -838,7 +963,7 @@ class TorsdagBot(discord.Client):
 
             # Opdatér stemmetallene i den offentlige besked.
             try:
-                await message.edit(embed=build_result_embed(snapshot))
+                await message.edit(embed=build_result_embed(snapshot, self.option_emojis()))
             except discord.Forbidden:
                 log.error("Kunne ikke opdatere afstemningen – manglende rettigheder.")
             except discord.HTTPException as exc:

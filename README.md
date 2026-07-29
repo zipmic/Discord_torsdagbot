@@ -2,13 +2,16 @@
 
 En lille Discord-bot der **hver torsdag kl. 15:00 dansk tid** automatisk opretter en afstemning i en valgt kanal:
 
-> @everyone
-> **Hvornår kommer du online i aften?**
+> @everyone DET ER TORSDAG! Meld din ankost!!
 >
-> - 🕖 Kl. 19:00–20:00
-> - 🕗 Kl. 20:00–21:00
-> - 🕘 Kl. 21:00–22:00
+> - 🕖 Early Bird kl. 19:00–20:00
+> - 🕗 Mellem kl. 20:00–20:30
+> - 🕣 Mellem kl. 20:30–21:00
+> - 🕘 Efter 21:00 lol
+> - 🕙 Efter 22:00 lol
 > - ❌ Jeg kommer ikke
+
+De tre nederste svarmuligheder kan få jeres egne server-emojis (`:clue:`, `:code:`, `:codeweiner:`) sat på – se [Server-emojis](#server-emojis).
 
 Botten er skrevet i Python med [discord.py](https://discordpy.readthedocs.io/) og kan pakkes til en enkelt `TorsdagBot.exe`, der kan køre på en almindelig Windows-computer.
 
@@ -31,7 +34,8 @@ Botten er skrevet i Python med [discord.py](https://discordpy.readthedocs.io/) o
 13. [Trin 11 – Start automatisk når Windows starter](#trin-11--start-automatisk-når-windows-starter)
 14. [Trin 12 – Vigtigt: computeren skal være tændt](#trin-12--vigtigt-computeren-skal-være-tændt)
 15. [Alle indstillinger](#alle-indstillinger)
-16. [Fejlfinding](#fejlfinding)
+16. [Server-emojis](#server-emojis)
+17. [Fejlfinding](#fejlfinding)
 
 ---
 
@@ -365,7 +369,30 @@ Alt sættes i `.env` (eller `config.json`, undtagen tokenet).
 | `CHECK_INTERVAL_SECONDS` | `20` | Hvor ofte uret tjekkes (5–300). |
 | `PING_EVERYONE` | `true` | Skal den ugentlige afstemning pinge `@everyone`? |
 | `TEST_PING_EVERYONE` | `false` | Skal `/testvote` pinge `@everyone`? |
+| `EMOJI_CLUE` | tom | Server-emoji til "Efter 21:00 lol". |
+| `EMOJI_CODE` | tom | Server-emoji til "Efter 22:00 lol". |
+| `EMOJI_CODEWEINER` | tom | Server-emoji til "Jeg kommer ikke". |
 | `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING` eller `ERROR`. |
+
+### Server-emojis
+
+Ur-emojierne (🕖 🕗 🕣 🕘 🕙 ❌) er almindelige unicode-emojis og virker altid.
+
+Jeres **egne server-emojis** kan ikke skrives som `:clue:` af en bot – Discord oversætter kun `:navn:` for rigtige brugere. Botten skal have emojiens fulde ID:
+
+1. Skriv `\:clue:` i en Discord-kanal – **med backslash foran** – og tryk Enter.
+2. Discord skriver den fulde form, fx `<:clue:112233445566778899>`.
+3. Kopiér hele teksten (inklusive `<` og `>`) ind i `.env`:
+
+```
+EMOJI_CLUE=<:clue:112233445566778899>
+EMOJI_CODE=<:code:112233445566778900>
+EMOJI_CODEWEINER=<:codeweiner:112233445566778901>
+```
+
+Botten skal være medlem af den server, emojien kommer fra. Kan en emoji ikke findes – eller er den skrevet forkert – skriver botten en advarsel i loggen og sender afstemningen **uden** den emoji. Afstemningen fejler altså aldrig på grund af en emoji.
+
+Emojierne vises som ikon på knappen (og på svarmuligheden i Discords indbyggede poll) samt i resultatlisten.
 
 ### To måder at stemme på
 
@@ -396,6 +423,8 @@ Alt sættes i `.env` (eller `config.json`, undtagen tokenet).
 | Afstemningen kom to gange | Du har to kopier af botten kørende. Tjek Jobliste for flere `TorsdagBot.exe`. |
 | Afstemningen kom slet ikke | Læs `torsdagbot.log`. Var computeren tændt kl. 15:00? Kørte programmet? Var der internet? |
 | Vil du "nulstille" en torsdag | Luk botten, slet `poll_state.json` (eller ret `last_poll_date`), og start igen. |
+| `:clue:` vises som tekst i stedet for et ikon | Brug den fulde form `<:clue:123...>` i `.env` – se [Server-emojis](#server-emojis). |
+| `Server-emojien ... blev ikke fundet` i loggen | Emoji-ID'et er forkert, eller botten er ikke medlem af den server, emojien hører til. |
 | Konsolvinduet lukker med det samme | Start via `start_bot.bat`, eller åbn en kommandoprompt i mappen og skriv `TorsdagBot.exe`, så kan du læse fejlbeskeden. |
 | Windows Defender blokerer `.exe`-filen | Filen er ikke kodesigneret. Vælg **Flere oplysninger → Kør alligevel**, eller tilføj mappen som undtagelse. |
 
