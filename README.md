@@ -15,7 +15,7 @@ En lille Discord-bot der **hver torsdag kl. 15:00 dansk tid** automatisk oprette
 
 Den øverste linje **skifter automatisk fra torsdag til torsdag** – der er 16 forskellige at rotere mellem, se [Torsdagsbeskederne](#torsdagsbeskederne).
 
-De tre nederste svarmuligheder kan få jeres egne server-emojis (`:clue:`, `:code:`, `:codeweiner:`) sat på – se [Server-emojis](#server-emojis).
+Svarmulighederne "Efter 21:00" og "Efter 22:00" har jeres egne server-emojis (`:code:` og `:clue:`) sat på som standard – se [Server-emojis](#server-emojis).
 
 Botten er skrevet i Python med [discord.py](https://discordpy.readthedocs.io/) og kan pakkes til en enkelt `TorsdagBot.exe`, der kan køre på en almindelig Windows-computer.
 
@@ -376,8 +376,8 @@ Alt sættes i `.env` (eller `config.json`, undtagen tokenet).
 | `CHECK_INTERVAL_SECONDS` | `20` | Hvor ofte uret tjekkes (5–300). |
 | `PING_EVERYONE` | `true` | Skal den ugentlige afstemning pinge `@everyone`? |
 | `TEST_PING_EVERYONE` | `false` | Skal `/testvote` pinge `@everyone`? |
-| `EMOJI_CLUE` | tom | Server-emoji til "Efter 21:00 lol". |
-| `EMOJI_CODE` | tom | Server-emoji til "Efter 22:00 lol". |
+| `EMOJI_CODE` | `<:code:887...>` | Server-emoji til "Efter 21:00 lol" (bygget ind, kan overstyres). |
+| `EMOJI_CLUE` | `<:clue:104...>` | Server-emoji til "Efter 22:00 lol" (bygget ind, kan overstyres). |
 | `EMOJI_CODEWEINER` | tom | Server-emoji til "Jeg kommer ikke". |
 | `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING` eller `ERROR`. |
 
@@ -424,21 +424,30 @@ Næste torsdagsbesked (7/16): Torsdagsbaren åbner senere. Hvornår forventes di
 
 Ur-emojierne (🕖 🕗 🕣 🕘 🕙 ❌) er almindelige unicode-emojis og virker altid.
 
-Jeres **egne server-emojis** kan ikke skrives som `:clue:` af en bot – Discord oversætter kun `:navn:` for rigtige brugere. Botten skal have emojiens fulde ID:
+To af svarmulighederne har derudover jeres egne server-emojis **bygget ind som standard**, så du ikke behøver at gøre noget:
 
-1. Skriv `\:clue:` i en Discord-kanal – **med backslash foran** – og tryk Enter.
-2. Discord skriver den fulde form, fx `<:clue:112233445566778899>`.
-3. Kopiér hele teksten (inklusive `<` og `>`) ind i `.env`:
+| Svarmulighed | Server-emoji |
+|---|---|
+| 🕘 Efter 21:00 lol | `:code:` (`<:code:887336573933334648>`) |
+| 🕙 Efter 22:00 lol | `:clue:` (`<:clue:1044354323561320539>`) |
 
-```
-EMOJI_CLUE=<:clue:112233445566778899>
-EMOJI_CODE=<:code:112233445566778900>
-EMOJI_CODEWEINER=<:codeweiner:112233445566778901>
-```
-
-Botten skal være medlem af den server, emojien kommer fra. Kan en emoji ikke findes – eller er den skrevet forkert – skriver botten en advarsel i loggen og sender afstemningen **uden** den emoji. Afstemningen fejler altså aldrig på grund af en emoji.
+For at det virker, skal botten være **medlem af den server, emojierne hører til**. Kan en emoji ikke findes, skriver botten en advarsel i loggen og sender afstemningen **uden** den emoji – afstemningen fejler altså aldrig på grund af en emoji.
 
 Emojierne vises som ikon på knappen (og på svarmuligheden i Discords indbyggede poll) samt i resultatlisten.
+
+**Vil I bytte til andre emojis?** En bot kan ikke bruge formen `:clue:` – den skal have emojiens fulde ID:
+
+1. Skriv `\:navn:` i en Discord-kanal – **med backslash foran** – og tryk Enter.
+2. Discord skriver den fulde form, fx `<:clue:1044354323561320539>`.
+3. Kopiér hele teksten (inklusive `<` og `>`) ind i `.env`. Nøglerne overstyrer standarderne:
+
+```
+EMOJI_CODE=<:code:887336573933334648>
+EMOJI_CLUE=<:clue:1044354323561320539>
+EMOJI_CODEWEINER=<:codeweiner:000000000000000000>
+```
+
+`EMOJI_CODEWEINER` sætter en emoji på "Jeg kommer ikke" – den er ikke sat som standard, men kan tilføjes her.
 
 ### To måder at stemme på
 

@@ -158,7 +158,8 @@ class PollOption:
     key: str  # Stabilt id – bruges i custom_id og i state-filen.
     text: str  # Selve teksten.
     clock: str  # Ur-emoji (unicode) som står forrest i teksten.
-    emoji_env: str = ""  # Valgfri server-emoji, sættes som EMOJI_<NAVN> i .env.
+    emoji_env: str = ""  # Navn på server-emojien; kan overstyres via EMOJI_<NAVN> i .env.
+    emoji_default: str = ""  # Server-emojiens fulde form <:navn:id> som standard.
 
     @property
     def label(self) -> str:
@@ -205,8 +206,10 @@ POLL_OPTIONS: tuple[PollOption, ...] = (
     PollOption("early", "Early Bird kl. 19:00–20:00", "🕖"),
     PollOption("t2000", "Mellem kl. 20:00–20:30", "🕗"),
     PollOption("t2030", "Mellem kl. 20:30–21:00", "🕣"),
-    PollOption("e2100", "Efter 21:00 lol", "🕘", "clue"),
-    PollOption("e2200", "Efter 22:00 lol", "🕙", "code"),
+    # Server-emojierne :code: og :clue: sidder som standard på 21:00- og
+    # 22:00-linjerne. De kan overstyres med EMOJI_CODE / EMOJI_CLUE i .env.
+    PollOption("e2100", "Efter 21:00 lol", "🕘", "code", "<:code:887336573933334648>"),
+    PollOption("e2200", "Efter 22:00 lol", "🕙", "clue", "<:clue:1044354323561320539>"),
     PollOption("nope", "Jeg kommer ikke", "❌", "codeweiner"),
 )
 
@@ -869,13 +872,15 @@ class TorsdagBot(discord.Client):
         Findes emojien ikke på serveren (fx forkert ID i .env), springes den
         over med en advarsel, så afstemningen stadig kan sendes.
         """
-        if not option.emoji_env:
-            return None
         if option.key in self._emoji_cache:
             return self._emoji_cache[option.key]
 
-        raw = self.config.custom_emojis.get(option.emoji_env)
-        emoji = parse_custom_emoji(raw, option.emoji_env) if raw else None
+        # .env overstyrer, ellers bruges standard-emojien fra POLL_OPTIONS.
+        raw = self.config.custom_emojis.get(option.emoji_env) or option.emoji_default
+        if not raw:
+            self._emoji_cache[option.key] = None
+            return None
+        emoji = parse_custom_emoji(raw, option.emoji_env)
 
         if emoji is None or emoji.id is None:
             # Ikke sat, ugyldig, eller en almindelig unicode-emoji: resultatet

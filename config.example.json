@@ -13,7 +13,8 @@
   "PING_EVERYONE": true,
   "TEST_PING_EVERYONE": false,
   "LOG_LEVEL": "INFO",
-  "EMOJI_CLUE": "<:clue:000000000000000000>",
-  "EMOJI_CODE": "<:code:000000000000000000>",
+  "_emoji_kommentar": ":code: og :clue: er allerede bygget ind i botten. Udfyld kun disse hvis I vil bytte til andre emojis - ellers slet linjerne.",
+  "EMOJI_CODE": "<:code:887336573933334648>",
+  "EMOJI_CLUE": "<:clue:1044354323561320539>",
   "EMOJI_CODEWEINER": "<:codeweiner:000000000000000000>"
 }
