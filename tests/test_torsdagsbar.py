@@ -456,6 +456,42 @@ async def test_leaderboard_command_send():
         db.close()
 
 
+async def test_live_counts_in_leaderboard():
+    print("\n== Igangværende deltagelse tæller med i statistik/leaderboard ==")
+    from torsdagsbar.module import TorsdagsbarModule
+    with tempfile.TemporaryDirectory() as d:
+        dbpath = Path(d) / "t.db"
+        cfg = make_config(dbpath)
+        db = Database(dbpath)
+        h = Harness(db, cfg)
+        chA = h.client.channels[CH_A]
+        per = FakeMember(71, "IgangværendePer")
+
+        # Per går ind kl. 20:00 og er der stadig (åben session)
+        h.set_now(datetime(2026, 5, 14, 20, 0, tzinfo=TZ))
+        await h.join(per, chA)
+
+        mod = TorsdagsbarModule(h.client, cfg, db)
+        # Kun 2 minutter inde -> under minimum -> må IKKE tælle endnu
+        mod.tracker.now = lambda: datetime(2026, 5, 14, 20, 2, tzinfo=TZ)
+        eng = await mod.build_engine()
+        lb = eng.leaderboard("tid")
+        check("under 5 min: endnu ikke på leaderboard", all(r.user_id != 71 for r in lb))
+
+        # 40 minutter inde -> over minimum -> skal tælle med LIVE
+        mod.tracker.now = lambda: datetime(2026, 5, 14, 20, 40, tzinfo=TZ)
+        eng = await mod.build_engine()
+        lb = eng.leaderboard("tid")
+        row = next((r for r in lb if r.user_id == 71), None)
+        check("over 5 min: på leaderboard mens det er i gang", row is not None)
+        check("live-tid ~40 min", row is not None and row.total_seconds == 40 * 60)
+
+        # build_engine(live=False) skal IKKE tælle den åbne session
+        eng2 = await mod.build_engine(live=False)
+        check("uden live: åben session tælles ikke", all(r.user_id != 71 for r in eng2.leaderboard("tid")))
+        db.close()
+
+
 async def main():
     await test_basic_registration()
     await test_channel_switch()
@@ -465,6 +501,7 @@ async def main():
     await test_summary_once()
     await test_streaks_records_leaderboard_cancel_corrections()
     await test_leaderboard_command_send()
+    await test_live_counts_in_leaderboard()
     print("\nALLE TORSDAGSBAR-TESTS BESTÅET ✅")
 
 

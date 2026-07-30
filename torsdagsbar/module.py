@@ -17,6 +17,7 @@ from discord.ext import tasks
 
 from .config import TorsdagsbarConfig
 from .database import Database
+from .period import clamp
 from .stats import Engine
 from . import formatting as fmt
 
@@ -119,11 +120,38 @@ class TorsdagsbarModule:
 
     # -- databaseadgang -> statistik-motor ---------------------------------
     async def build_engine(
-        self, start: Optional[str] = None, end: Optional[str] = None
+        self,
+        start: Optional[str] = None,
+        end: Optional[str] = None,
+        live: bool = True,
     ) -> Engine:
         """Byg en statistik-motor. Streaks kræver fuld historik, så motoren
-        indlæser altid ALLE sessioner; periodefiltrering sker i metoderne."""
-        sessions = await asyncio.to_thread(self.db.load_sessions, None, None, None, False)
+        indlæser altid ALLE sessioner; periodefiltrering sker i metoderne.
+
+        Med ``live=True`` (standard) medregnes åbne sessioner, mens
+        torsdagsbaren er i gang: de får en foreløbig varighed op til "nu"
+        (klampet til registreringsvinduet). Så viser statistik og leaderboard
+        den løbende tid med det samme i stedet for først, når folk går.
+        """
+        sessions = await asyncio.to_thread(
+            self.db.load_sessions, None, None, None, live
+        )
+        if live:
+            now = self.tracker.now()
+            for s in sessions:
+                if s.left_at is not None:
+                    continue
+                try:
+                    bar = date.fromisoformat(s.bar_date)
+                except ValueError:
+                    # Kan ikke placere sessionen i et vindue – spring den over.
+                    s.duration_seconds = None
+                    continue
+                _, window_end = self.schedule.window_of(bar)
+                joined_local = s.joined_at.astimezone(self.tz)
+                provisional = clamp(now, joined_local, window_end)
+                s.left_at = provisional
+                s.duration_seconds = max(0, int((provisional - joined_local).total_seconds()))
         nights = await asyncio.to_thread(self.db.load_nights)
         corrections = await asyncio.to_thread(self.db.load_corrections, None, None, None)
         return Engine(sessions, nights, corrections, self.config.min_seconds)
