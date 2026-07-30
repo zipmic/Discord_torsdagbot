@@ -2,7 +2,9 @@
 
 En lille Discord-bot der **hver torsdag kl. 15:00 dansk tid** automatisk opretter en afstemning i en valgt kanal:
 
-> @everyone DET ER TORSDAG! Meld din ankost!!
+> @everyone Det er torsdag!
+>
+> **Hvornår kommer du online i aften?**
 >
 > - 🕖 Early Bird kl. 19:00–20:00
 > - 🕗 Mellem kl. 20:00–20:30
@@ -10,6 +12,8 @@ En lille Discord-bot der **hver torsdag kl. 15:00 dansk tid** automatisk oprette
 > - 🕘 Efter 21:00 lol
 > - 🕙 Efter 22:00 lol
 > - ❌ Jeg kommer ikke
+
+Den øverste linje **skifter automatisk fra torsdag til torsdag** – der er 16 forskellige at rotere mellem, se [Torsdagsbeskederne](#torsdagsbeskederne).
 
 De tre nederste svarmuligheder kan få jeres egne server-emojis (`:clue:`, `:code:`, `:codeweiner:`) sat på – se [Server-emojis](#server-emojis).
 
@@ -34,14 +38,16 @@ Botten er skrevet i Python med [discord.py](https://discordpy.readthedocs.io/) o
 13. [Trin 11 – Start automatisk når Windows starter](#trin-11--start-automatisk-når-windows-starter)
 14. [Trin 12 – Vigtigt: computeren skal være tændt](#trin-12--vigtigt-computeren-skal-være-tændt)
 15. [Alle indstillinger](#alle-indstillinger)
-16. [Server-emojis](#server-emojis)
-17. [Fejlfinding](#fejlfinding)
+16. [Torsdagsbeskederne](#torsdagsbeskederne)
+17. [Server-emojis](#server-emojis)
+18. [Fejlfinding](#fejlfinding)
 
 ---
 
 ## Hvad kan botten?
 
 - ✅ Sender afstemningen **automatisk hver torsdag kl. 15:00** i tidszonen `Europe/Copenhagen` (sommer-/vintertid håndteres automatisk).
+- ✅ **Skifter besked hver torsdag** – 16 forskellige tekster på rotation, så det ikke bliver den samme sætning hver uge.
 - ✅ Sender **kun én afstemning pr. torsdag** – også hvis du genstarter programmet 10 gange. Datoen gemmes i `poll_state.json`.
 - ✅ Virker uanset om programmet startes **før**, **under** eller **efter** kl. 15:00 om torsdagen.
 - ✅ Bruger **Discords indbyggede poll-funktion** (discord.py 2.5+). Kan ikke den bruges, skifter botten automatisk til **knapper med persistente Views**.
@@ -69,7 +75,7 @@ Filer der **oprettes automatisk**, når botten kører:
 
 | Fil | Hvad den indeholder |
 |---|---|
-| `poll_state.json` | Datoen for den seneste afstemning + de afgivne stemmer |
+| `poll_state.json` | Datoen for den seneste afstemning, hvor langt beskedrotationen er nået, + de afgivne stemmer |
 | `torsdagbot.log` | Log over hvad botten har lavet |
 
 > 📁 **Vigtigt:** `.env`, `config.json`, `poll_state.json` og `torsdagbot.log` skal ligge i **samme mappe som `TorsdagBot.exe`** – ikke i den mappe, du tilfældigvis står i, når du starter programmet. Botten finder selv filerne ud fra placeringen af `.exe`-filen.
@@ -245,8 +251,9 @@ Næste planlagte afstemning: Thursday 30-07-2026 kl. 15:00 CEST
 Skriv **`/testvote`** i Discord. Botten opretter **med det samme** præcis den samme afstemning i den valgte kanal.
 
 - Kun brugeren med `OWNER_ID` i `.env` kan bruge kommandoen – alle andre får en privat afvisning.
-- **Testafstemningen ændrer ikke datoen for den ugentlige afstemning.** Torsdagens automatiske afstemning bliver altså stadig sendt som planlagt.
+- **Testafstemningen ændrer hverken datoen for den ugentlige afstemning eller beskedrotationen.** Torsdagens automatiske afstemning bliver altså stadig sendt som planlagt, med den besked der stod på tur.
 - Som standard giver testafstemningen **ikke** en rigtig `@everyone`-notifikation (teksten er den samme). Vil du teste med ping, sæt `TEST_PING_EVERYONE=true` i `.env`.
+- Vil du se en bestemt af de 16 torsdagsbeskeder, skriv fx **`/testvote besked:11`**. Uden tallet bruges den, der er næst i køen.
 
 > Er `/testvote` ikke dukket op i Discord? Sæt `GUILD_ID` i `.env` og genstart botten – så registreres kommandoen med det samme. Ellers kan globale kommandoer tage op til en time. Tjek også at du inviterede botten med scope'et `applications.commands`.
 
@@ -374,6 +381,45 @@ Alt sættes i `.env` (eller `config.json`, undtagen tokenet).
 | `EMOJI_CODEWEINER` | tom | Server-emoji til "Jeg kommer ikke". |
 | `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING` eller `ERROR`. |
 
+### Torsdagsbeskederne
+
+Botten skifter besked hver gang den sender den ugentlige afstemning, og starter forfra på listen efter den sidste. Med 16 beskeder går der altså **16 uger, før den samme tekst kommer igen**.
+
+Rækkefølgen er:
+
+| # | Besked |
+|---|---|
+| 1 | Det er torsdag! |
+| 2 | Det er torsdag (Jens, det er dagen før fredag og dagen efter onsdag) |
+| 3 | Torsdagsbaren åbner i dag, kommer du i baren? |
+| 4 | Det er torsdag! Hvornår hopper du online i aften? |
+| 5 | Torsdag er landet. Skal der games i aften? |
+| 6 | Dagen før fredag kræver en vigtig beslutning: Hvornår kommer du online? |
+| 7 | Torsdagsbaren åbner senere. Hvornår forventes dit fremmøde? |
+| 8 | Endnu en torsdag, endnu en mulighed for at være social uden at forlade huset. |
+| 9 | Kalenderen siger torsdag. Discord siger: Hvornår kommer folk online? |
+| 10 | Torsdagsalarmen er gået! Meld din forventede ankomsttid. |
+| 11 | Jens, bare så der ikke er nogen tvivl: Det er dagen efter onsdag og dagen før fredag. Hvornår kommer du online? |
+| 12 | Breaking news: Det er torsdag. Flere oplysninger følger, når I har stemt. |
+| 13 | Din ugentlige påmindelse om, at torsdag aften ikke planlægger sig selv. |
+| 14 | Torsdagens vigtigste demokratiske handling begynder nu. Afgiv din stemme. |
+| 15 | Serveren har brug for dig. Eller i det mindste brug for at vide, hvornår du kommer. |
+| 16 | Torsdag.exe er startet. Vælg forventet login-tidspunkt. |
+
+Alle beskederne får `@everyone` sat foran, og selve spørgsmålet i afstemningen er altid det samme korte **"Hvornår kommer du online i aften?"** – så den lange sjove tekst ikke står to gange i samme besked.
+
+**Se hvor langt rotationen er nået:** botten skriver det i loggen, hver gang den starter:
+
+```
+Næste torsdagsbesked (7/16): Torsdagsbaren åbner senere. Hvornår forventes dit fremmøde?
+```
+
+**Ret i beskederne:** listen står i `bot.py` under `THURSDAY_MESSAGES`. Du kan tilføje, fjerne eller omskrive linjer – rækkefølgen i filen er også rækkefølgen de bruges i. Husk at bygge `.exe`-filen igen med `build.bat` bagefter.
+
+**Forhåndsvis en bestemt besked:** `/testvote besked:11` sender afstemningen med besked nummer 11. Uden tallet bruges den, der står næst i køen. **En test rykker aldrig rotationen** – næste torsdag får præcis den besked, der stod på tur.
+
+**Start rotationen forfra:** luk botten, sæt `"message_index": 0` i `poll_state.json` (eller slet filen), og start igen.
+
 ### Server-emojis
 
 Ur-emojierne (🕖 🕗 🕣 🕘 🕙 ❌) er almindelige unicode-emojis og virker altid.
@@ -423,6 +469,7 @@ Emojierne vises som ikon på knappen (og på svarmuligheden i Discords indbygged
 | Afstemningen kom to gange | Du har to kopier af botten kørende. Tjek Jobliste for flere `TorsdagBot.exe`. |
 | Afstemningen kom slet ikke | Læs `torsdagbot.log`. Var computeren tændt kl. 15:00? Kørte programmet? Var der internet? |
 | Vil du "nulstille" en torsdag | Luk botten, slet `poll_state.json` (eller ret `last_poll_date`), og start igen. |
+| Samme besked to torsdage i træk | Er `poll_state.json` slettet eller flyttet, starter rotationen forfra. Filen skal ligge ved siden af `.exe`-filen. |
 | `:clue:` vises som tekst i stedet for et ikon | Brug den fulde form `<:clue:123...>` i `.env` – se [Server-emojis](#server-emojis). |
 | `Server-emojien ... blev ikke fundet` i loggen | Emoji-ID'et er forkert, eller botten er ikke medlem af den server, emojien hører til. |
 | Konsolvinduet lukker med det samme | Start via `start_bot.bat`, eller åbn en kommandoprompt i mappen og skriv `TorsdagBot.exe`, så kan du læse fejlbeskeden. |

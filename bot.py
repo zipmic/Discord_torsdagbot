@@ -2,8 +2,8 @@
 TorsdagBot – automatisk ugentlig Discord-afstemning.
 
 Botten sender hver torsdag kl. 15:00 (Europe/Copenhagen) en afstemning i en
-bestemt kanal: "DET ER TORSDAG! Meld din ankost!!" – med svarmuligheder for,
-hvornår man kommer online om aftenen.
+bestemt kanal med svarmuligheder for, hvornår man kommer online om aftenen.
+Selve torsdagsbeskeden skifter automatisk fra uge til uge (THURSDAY_MESSAGES).
 
 Funktioner:
   * Bruger Discords indbyggede poll-funktion (discord.py >= 2.5) hvis den er
@@ -171,7 +171,35 @@ class PollOption:
         return f"{self.clock} {self.text}"
 
 
-POLL_QUESTION = "DET ER TORSDAG! Meld din ankost!!"
+# Selve spørgsmålet. Det står i poll-boksen (eller som titel på embed'en) og
+# er bevidst kort og fast, så det ikke gentager den roterende besked ovenfor.
+POLL_QUESTION = "Hvornår kommer du online i aften?"
+
+# Torsdagsbeskeden. Botten tager den næste i rækken hver gang den sender den
+# ugentlige afstemning, og starter forfra når listen er brugt. Nummeret gemmes
+# i poll_state.json, så rotationen fortsætter efter en genstart.
+#
+# Du må gerne rette, tilføje eller fjerne linjer – rækkefølgen her er også
+# rækkefølgen beskederne bruges i.
+THURSDAY_MESSAGES: tuple[str, ...] = (
+    "Det er torsdag!",
+    "Det er torsdag (Jens, det er dagen før fredag og dagen efter onsdag)",
+    "Torsdagsbaren åbner i dag, kommer du i baren?",
+    "Det er torsdag! Hvornår hopper du online i aften?",
+    "Torsdag er landet. Skal der games i aften?",
+    "Dagen før fredag kræver en vigtig beslutning: Hvornår kommer du online?",
+    "Torsdagsbaren åbner senere. Hvornår forventes dit fremmøde?",
+    "Endnu en torsdag, endnu en mulighed for at være social uden at forlade huset.",
+    "Kalenderen siger torsdag. Discord siger: Hvornår kommer folk online?",
+    "Torsdagsalarmen er gået! Meld din forventede ankomsttid.",
+    "Jens, bare så der ikke er nogen tvivl: Det er dagen efter onsdag og dagen "
+    "før fredag. Hvornår kommer du online?",
+    "Breaking news: Det er torsdag. Flere oplysninger følger, når I har stemt.",
+    "Din ugentlige påmindelse om, at torsdag aften ikke planlægger sig selv.",
+    "Torsdagens vigtigste demokratiske handling begynder nu. Afgiv din stemme.",
+    "Serveren har brug for dig. Eller i det mindste brug for at vide, hvornår du kommer.",
+    "Torsdag.exe er startet. Vælg forventet login-tidspunkt.",
+)
 
 POLL_OPTIONS: tuple[PollOption, ...] = (
     PollOption("early", "Early Bird kl. 19:00–20:00", "🕖"),
@@ -182,9 +210,17 @@ POLL_OPTIONS: tuple[PollOption, ...] = (
     PollOption("nope", "Jeg kommer ikke", "❌", "codeweiner"),
 )
 
-# Selve beskedteksten. @everyone står i "content", da det er den eneste måde
-# Discord rent faktisk pinger alle på.
-POLL_CONTENT = f"@everyone {POLL_QUESTION}"
+
+def build_content(message: str, is_test: bool = False) -> str:
+    """Byg beskedteksten over afstemningen.
+
+    @everyone står i "content", fordi det er den eneste måde Discord rent
+    faktisk giver alle en notifikation.
+    """
+    content = f"@everyone {message}"
+    if is_test:
+        content += "\n_(test – ændrer ikke den ugentlige afstemning)_"
+    return content
 
 # Server-emojis (fx :clue:) kan kun sendes af en bot i formen <:navn:id>.
 CUSTOM_EMOJI_RE = re.compile(r"^<(a?):([A-Za-z0-9_]{2,32}):(\d{15,25})>$")
@@ -449,7 +485,12 @@ class StateStore:
     # --- indlæsning / gemning ---------------------------------------------
     def load(self) -> None:
         if not self.path.exists():
-            self.data = {"version": STATE_VERSION, "last_poll_date": None, "polls": {}}
+            self.data = {
+                "version": STATE_VERSION,
+                "last_poll_date": None,
+                "message_index": 0,
+                "polls": {},
+            }
             log.info("Ingen state-fil endnu – opretter ny ved %s", self.path)
             return
         try:
@@ -465,19 +506,27 @@ class StateStore:
                 self.path.replace(backup)
             except OSError:
                 pass
-            self.data = {"version": STATE_VERSION, "last_poll_date": None, "polls": {}}
+            self.data = {
+                "version": STATE_VERSION,
+                "last_poll_date": None,
+                "message_index": 0,
+                "polls": {},
+            }
             return
 
         data.setdefault("version", STATE_VERSION)
         data.setdefault("last_poll_date", None)
+        data.setdefault("message_index", 0)
         data.setdefault("polls", {})
         if not isinstance(data["polls"], dict):
             data["polls"] = {}
         self.data = data
         log.info(
-            "State indlæst fra %s (seneste afstemning: %s)",
+            "State indlæst fra %s (seneste afstemning: %s, næste besked: %d/%d)",
             self.path,
             self.data.get("last_poll_date") or "ingen",
+            self.next_message_index() + 1,
+            len(THURSDAY_MESSAGES),
         )
 
     def save(self) -> None:
@@ -499,6 +548,18 @@ class StateStore:
     def last_poll_date(self) -> Optional[str]:
         value = self.data.get("last_poll_date")
         return value if isinstance(value, str) else None
+
+    # --- rotation af torsdagsbeskeden ---------------------------------------
+    def next_message_index(self) -> int:
+        """Nummeret (0-baseret) på den besked der bruges næste gang."""
+        index = self.data.get("message_index", 0)
+        if not isinstance(index, int) or index < 0:
+            index = 0
+        return index % len(THURSDAY_MESSAGES)
+
+    def advance_message(self) -> None:
+        """Gå videre til næste besked – starter forfra når listen er brugt."""
+        self.data["message_index"] = (self.next_message_index() + 1) % len(THURSDAY_MESSAGES)
 
     def mark_poll_done(self, day: date, status: str = "sent") -> None:
         self.data["last_poll_date"] = day.isoformat()
@@ -690,6 +751,12 @@ class TorsdagBot(discord.Client):
                 self.config.timezone_name,
             )
             log.info("Næste planlagte afstemning: %s", self._format_next_run())
+            log.info(
+                "Næste torsdagsbesked (%d/%d): %s",
+                self.state.next_message_index() + 1,
+                len(THURSDAY_MESSAGES),
+                THURSDAY_MESSAGES[self.state.next_message_index()],
+            )
 
         await self._check_channel_and_permissions()
 
@@ -852,22 +919,36 @@ class TorsdagBot(discord.Client):
             poll.add_answer(text=option.label, emoji=self.custom_emoji_for(option))
         return poll
 
-    async def send_poll(self, *, is_test: bool = False) -> discord.Message:
+    async def send_poll(
+        self, *, is_test: bool = False, message_index: Optional[int] = None
+    ) -> discord.Message:
         """Send afstemningen til den konfigurerede kanal.
 
         Bruger Discords indbyggede poll hvis muligt, ellers knapper.
-        Rejser RuntimeError med en læsbar besked ved fejl.
+        ``message_index`` vælger en bestemt torsdagsbesked; udelades den, bruges
+        den næste i rotationen. Rejser RuntimeError med en læsbar besked ved fejl.
         """
         async with self._send_lock:
             channel = await self._resolve_channel()
+
+            index = (
+                self.state.next_message_index()
+                if message_index is None
+                else message_index % len(THURSDAY_MESSAGES)
+            )
+            besked = THURSDAY_MESSAGES[index]
 
             ping = self.config.test_ping_everyone if is_test else self.config.ping_everyone
             allowed = discord.AllowedMentions(
                 everyone=ping, users=False, roles=False, replied_user=False
             )
-            content = POLL_CONTENT
-            if is_test:
-                content += "\n_(test – ændrer ikke den ugentlige afstemning)_"
+            content = build_content(besked, is_test=is_test)
+            log.info(
+                "Bruger torsdagsbesked %d/%d: %s",
+                index + 1,
+                len(THURSDAY_MESSAGES),
+                besked,
+            )
 
             brug_native = self.config.poll_mode in {"auto", "native"} and self._native_poll_supported()
             if self.config.poll_mode == "native" and not brug_native:
@@ -1047,9 +1128,16 @@ class TorsdagBot(discord.Client):
 
             async with self._state_lock:
                 self.state.mark_poll_done(now.date(), status="sent")
+                # Næste torsdag skal bruge den næste besked i rotationen.
+                self.state.advance_message()
                 await self.state.save_async()
             self._retry_not_before = None
-            log.info("Næste planlagte afstemning: %s", self._format_next_run())
+            log.info(
+                "Næste planlagte afstemning: %s (besked %d/%d)",
+                self._format_next_run(),
+                self.state.next_message_index() + 1,
+                len(THURSDAY_MESSAGES),
+            )
 
         except Exception:
             # Loopet må aldrig dø – ellers stopper den ugentlige afstemning.
@@ -1066,7 +1154,14 @@ class TorsdagBot(discord.Client):
             name="testvote",
             description="Opret afstemningen med det samme (kun for bottens ejer).",
         )
-        async def testvote(interaction: discord.Interaction) -> None:
+        @app_commands.describe(
+            besked=f"Vælg en bestemt torsdagsbesked (1-{len(THURSDAY_MESSAGES)}). "
+            "Udelades den, bruges den næste i rotationen."
+        )
+        async def testvote(
+            interaction: discord.Interaction,
+            besked: Optional[app_commands.Range[int, 1, len(THURSDAY_MESSAGES)]] = None,
+        ) -> None:
             # Ejer-tjek: kun brugeren med OWNER_ID må bruge kommandoen.
             if self.config.owner_id is None:
                 await interaction.response.send_message(
@@ -1088,8 +1183,11 @@ class TorsdagBot(discord.Client):
             await interaction.response.defer(ephemeral=True, thinking=True)
             log.info("/testvote kørt af ejeren %s (%s).", interaction.user, interaction.user.id)
             try:
-                # is_test=True: rører IKKE datoen for den ugentlige afstemning.
-                message = await self.send_poll(is_test=True)
+                # is_test=True: rører hverken datoen eller beskedrotationen.
+                message = await self.send_poll(
+                    is_test=True,
+                    message_index=None if besked is None else besked - 1,
+                )
             except RuntimeError as exc:
                 await interaction.followup.send(f"❌ {exc}", ephemeral=True)
                 log.error("/testvote fejlede: %s", exc)
@@ -1099,9 +1197,11 @@ class TorsdagBot(discord.Client):
                 log.exception("/testvote fejlede med en Discord-fejl")
                 return
 
+            nummer = (self.state.next_message_index() + 1) if besked is None else besked
             await interaction.followup.send(
-                f"✅ Testafstemning oprettet: {message.jump_url}\n"
-                "Den ugentlige afstemning er uændret.",
+                f"✅ Testafstemning oprettet med besked {nummer}/{len(THURSDAY_MESSAGES)}: "
+                f"{message.jump_url}\n"
+                "Den ugentlige afstemning og beskedrotationen er uændret.",
                 ephemeral=True,
             )
 
