@@ -63,8 +63,24 @@ except ImportError as exc:  # pragma: no cover
     sys.exit(1)
 
 
+# Torsdagsbar-udvidelsen (voice-registrering + statistik). Den er en selvstændig
+# pakke; kan den ikke importeres, kører afstemningen bare videre uden den.
+try:
+    from torsdagsbar import (
+        TorsdagsbarModule,
+        load_torsdagsbar_config,
+    )
+    from torsdagsbar.database import Database as TorsdagsbarDatabase
+
+    TORSDAGSBAR_AVAILABLE = True
+    TORSDAGSBAR_IMPORT_ERROR: Optional[str] = None
+except Exception as exc:  # pragma: no cover - fanges kun ved ødelagt install
+    TORSDAGSBAR_AVAILABLE = False
+    TORSDAGSBAR_IMPORT_ERROR = str(exc)
+
+
 APP_NAME = "TorsdagBot"
-APP_VERSION = "1.0.0"
+APP_VERSION = "2.0.0"
 
 # Statefilens skema-version, så filen kan opgraderes senere uden at gå i stykker.
 STATE_VERSION = 1
@@ -690,13 +706,23 @@ class PollView(discord.ui.View):
 # 7. Selve botten
 # ===========================================================================
 class TorsdagBot(discord.Client):
-    def __init__(self, config: Config, state: StateStore, tz: ZoneInfo) -> None:
-        # Ingen privilegerede intents er nødvendige: botten læser ikke beskeder,
-        # den sender kun beskeder og modtager interaktioner.
+    def __init__(
+        self,
+        config: Config,
+        state: StateStore,
+        tz: ZoneInfo,
+        tb_config: Any = None,
+        tb_db: Any = None,
+    ) -> None:
+        # Ingen privilegerede intents er nødvendige. Bemærk: voice_states er en
+        # del af discord.Intents.default() (og er IKKE privilegeret), så
+        # torsdagsbar-registreringen virker uden at slå noget ekstra til i
+        # Developer Portal. Botten læser stadig ikke beskeder.
         intents = discord.Intents.default()
         intents.message_content = False
         intents.members = False
         intents.presences = False
+        intents.voice_states = True  # nødvendig for torsdagsbar-registreringen
 
         super().__init__(intents=intents)
 
@@ -711,6 +737,12 @@ class TorsdagBot(discord.Client):
         self._ready_logged = False
         self._emoji_cache: dict[str, Optional[discord.PartialEmoji]] = {}
 
+        # Torsdagsbar-modulet (voice-registrering + statistik). Databasen deles
+        # på tværs af genforbindelser, mens modulet genskabes pr. klient.
+        self.torsdagsbar: Any = None
+        if tb_config is not None and getattr(tb_config, "enabled", False) and tb_db is not None:
+            self.torsdagsbar = TorsdagsbarModule(self, tb_config, tb_db)
+
         self._register_commands()
 
     # -- opstart ------------------------------------------------------------
@@ -720,6 +752,14 @@ class TorsdagBot(discord.Client):
         # stadig virker efter en genstart af botten.
         self.add_view(PollView(self))
         log.info("Persistent View registreret (knapper virker efter genstart).")
+
+        # Registrér torsdagsbar-kommandoerne FØR synkroniseringen nedenfor, så
+        # /torsdagsbar kommer med i samme sync.
+        if self.torsdagsbar is not None:
+            try:
+                await self.torsdagsbar.setup()
+            except Exception:
+                log.exception("Torsdagsbar: kunne ikke registrere kommandoer/task.")
 
         # Synkronisér slash-kommandoer.
         try:
@@ -763,10 +803,29 @@ class TorsdagBot(discord.Client):
 
         await self._check_channel_and_permissions()
 
+        # Genopret torsdagsbar-registreringen (efter voice-cachen er klar).
+        if self.torsdagsbar is not None:
+            await self.torsdagsbar.on_ready()
+
+    async def on_voice_state_update(
+        self,
+        member: "discord.Member",
+        before: "discord.VoiceState",
+        after: "discord.VoiceState",
+    ) -> None:
+        """Videresend voice-ændringer til torsdagsbar-modulet (hvis aktivt)."""
+        if self.torsdagsbar is not None:
+            await self.torsdagsbar.on_voice_state_update(member, before, after)
+
     async def close(self) -> None:
         """Stop planlæggeren pænt, så den ikke kører videre på en lukket klient."""
         if self.scheduler_loop.is_running():
             self.scheduler_loop.cancel()
+        if self.torsdagsbar is not None:
+            try:
+                await self.torsdagsbar.close()
+            except Exception:
+                log.debug("Fejl under lukning af torsdagsbar-modulet", exc_info=True)
         await super().close()
 
     async def on_connect(self) -> None:
@@ -1233,19 +1292,26 @@ def ugedag_navn(weekday: int) -> str:
 # ===========================================================================
 # 8. Opstart med automatisk genforbindelse
 # ===========================================================================
-async def run_forever(config: Config, state: StateStore, tz: ZoneInfo) -> None:
+async def run_forever(
+    config: Config,
+    state: StateStore,
+    tz: ZoneInfo,
+    tb_config: Any = None,
+    tb_db: Any = None,
+) -> None:
     """Kør botten og genstart forbindelsen automatisk ved netværksfejl.
 
     discord.py genopretter selv gateway-forbindelsen (reconnect=True). Denne
     løkke håndterer de tilfælde hvor selve klienten stopper – fx hvis
-    internettet er væk ved opstart.
+    internettet er væk ved opstart. Torsdagsbar-databasen deles på tværs af
+    genforbindelser; kun selve klienten (og modulet) genskabes.
     """
     backoff = 5
     max_backoff = 300
 
     while True:
         # En discord.Client kan ikke genbruges efter close() – opret en ny.
-        bot = TorsdagBot(config, state, tz)
+        bot = TorsdagBot(config, state, tz, tb_config=tb_config, tb_db=tb_db)
         startet = datetime.now()
         try:
             await bot.start(config.token, reconnect=True)
@@ -1347,14 +1413,47 @@ def main() -> int:
     # Tjek-intervallet er konfigurerbart – opdatér loopet før det startes.
     TorsdagBot.scheduler_loop.change_interval(seconds=config.check_interval_seconds)
 
+    # --- Torsdagsbar-udvidelsen (valgfri) ---------------------------------
+    tb_config = None
+    tb_db = None
+    if TORSDAGSBAR_AVAILABLE:
+        try:
+            tb_config = load_torsdagsbar_config(
+                APP_DIR, CONFIG_FILE, tz, guild_id=config.guild_id
+            )
+        except Exception as exc:
+            log.error("Torsdagsbar-konfigurationsfejl: %s (funktionen slås fra)", exc)
+            tb_config = None
+
+        if tb_config is not None and tb_config.enabled:
+            try:
+                tb_db = TorsdagsbarDatabase(tb_config.db_path)
+                log.info(
+                    "Torsdagsbar aktiveret · server: %s · voicekanaler: %s · "
+                    "opsummering: %s · min. deltagelse: %d min · database: %s",
+                    tb_config.server_id,
+                    ", ".join(str(c) for c in tb_config.voice_channel_ids),
+                    tb_config.summary_channel_id,
+                    tb_config.min_minutes,
+                    tb_config.db_path,
+                )
+            except Exception:
+                log.exception("Torsdagsbar: kunne ikke åbne databasen – funktionen slås fra.")
+                tb_config, tb_db = None, None
+    else:
+        log.warning("Torsdagsbar-modulet kunne ikke indlæses: %s", TORSDAGSBAR_IMPORT_ERROR)
+
     try:
-        asyncio.run(run_forever(config, state, tz))
+        asyncio.run(run_forever(config, state, tz, tb_config=tb_config, tb_db=tb_db))
     except KeyboardInterrupt:
         log.info("Afbrudt af brugeren (Ctrl+C). Lukker ned.")
     except Exception:
         log.exception("Botten stoppede på grund af en uventet fejl")
         pause_hvis_exe()
         return 1
+    finally:
+        if tb_db is not None:
+            tb_db.close()
 
     return 0
 

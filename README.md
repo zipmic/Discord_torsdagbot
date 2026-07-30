@@ -19,6 +19,8 @@ Svarmulighederne "Efter 21:00" og "Efter 22:00" har jeres egne server-emojis (`:
 
 Botten er skrevet i Python med [discord.py](https://discordpy.readthedocs.io/) og kan pakkes til en enkelt `TorsdagBot.exe`, der kan køre på en almindelig Windows-computer.
 
+> 🆕 **Nyt: Torsdagsbar-statistik.** Botten kan nu også registrere, hvor længe folk sidder i voicechat under torsdagsbaren (torsdag 19:00 → fredag 03:00), sende en automatisk opsummering hver fredag kl. 12:00, og vise statistik, streaks, rekorder og leaderboard med `/torsdagsbar`-kommandoerne. Funktionen er **valgfri** og påvirker ikke afstemningen. Se **[Torsdagsbar-statistik](#torsdagsbar--voice-registrering-og-statistik)**.
+
 ---
 
 ## Indhold
@@ -63,10 +65,12 @@ Botten er skrevet i Python med [discord.py](https://discordpy.readthedocs.io/) o
 
 | Fil | Hvad den gør |
 |---|---|
-| `bot.py` | Hele botten |
+| `bot.py` | Hovedprogrammet (afstemning + kobler torsdagsbaren på) |
+| `torsdagsbar/` | Pakke med voice-registrering og statistik (database, tracker, kommandoer) |
+| `tests/` | Automatiske tests |
 | `requirements.txt` | Python-pakker der skal installeres |
 | `.env.example` | Skabelon til dine indstillinger – **kopiér den til `.env`** |
-| `config.example.json` | Valgfrit alternativ til `.env` (undtagen tokenet) |
+| `config.example.json` | Valgfrit alternativ til `.env` (undtagen tokenet) + torsdagsbar-indstillinger |
 | `build.bat` | Bygger `dist\TorsdagBot.exe` |
 | `start_bot.bat` | Starter botten (og genstarter den hvis den lukker) |
 | `README.md` | Denne vejledning |
@@ -76,9 +80,10 @@ Filer der **oprettes automatisk**, når botten kører:
 | Fil | Hvad den indeholder |
 |---|---|
 | `poll_state.json` | Datoen for den seneste afstemning, hvor langt beskedrotationen er nået, + de afgivne stemmer |
+| `torsdagsbar.db` | SQLite-database med al voice-deltagelse (kun hvis torsdagsbaren er slået til) |
 | `torsdagbot.log` | Log over hvad botten har lavet |
 
-> 📁 **Vigtigt:** `.env`, `config.json`, `poll_state.json` og `torsdagbot.log` skal ligge i **samme mappe som `TorsdagBot.exe`** – ikke i den mappe, du tilfældigvis står i, når du starter programmet. Botten finder selv filerne ud fra placeringen af `.exe`-filen.
+> 📁 **Vigtigt:** `.env`, `config.json`, `poll_state.json`, `torsdagsbar.db` og `torsdagbot.log` skal ligge i **samme mappe som `TorsdagBot.exe`** – ikke i den mappe, du tilfældigvis står i, når du starter programmet. Botten finder selv filerne ud fra placeringen af `.exe`-filen.
 
 ---
 
@@ -463,6 +468,116 @@ EMOJI_CODEWEINER=<:codeweiner:000000000000000000>
 
 ---
 
+## Torsdagsbar – voice-registrering og statistik
+
+Denne del af botten registrerer automatisk, hvor længe hver person deltager i voicechat under torsdagsbaren, og laver statistik oven på det. Den er **helt valgfri**: udfylder du ikke indstillingerne nedenfor, kører afstemningen bare videre som før.
+
+### Hvad den kan
+
+- ⏱️ **Registrerer voice-tid** i udvalgte voicekanaler i tidsrummet **torsdag 19:00 → fredag 03:00** (dansk tid, sommer-/vintertid håndteres).
+- 🍻 **Fredagsopsummering** kl. 12:00: hvem deltog og hvor længe, samlet tid, antal deltagere, aftenens højdepunkter (længst til stede, nye personlige rekorder, ny deltagerrekord, forlængede streaks). Sendes **kun én gang** pr. torsdagsbar – også ved genstart.
+- 📊 **Statistik, streaks, rekorder, leaderboard og live-status** via `/torsdagsbar`-kommandoerne.
+- 💾 **Gemmes permanent i en SQLite-database** (`torsdagsbar.db` ved siden af `.exe`-filen), så intet forsvinder ved genstart. SQLite er en del af Python – ingen ekstra installation.
+- 🔁 **Robust**: håndterer genstart midt i en aften, kanalskift, tabt internet, at man allerede sad der kl. 19:00, og at man stadig sidder der kl. 03:00. Botter registreres ikke.
+
+### Sådan slår du den til
+
+Alt sættes i **`config.json`** (under `"torsdagsbar"`) eller i **`.env`** (med `TB_`-præfiks). Du skal bruge tre ID'er – kopiér dem med **Developer Mode** slået til (se [Trin 6](#trin-6--slå-developer-mode-til)):
+
+1. **Server-ID** – højreklik på serverikonet → Kopiér server-ID.
+2. **Voicekanal-ID(er)** – højreklik på selve voicekanalen → **Kopiér kanal-ID**. Flere kanaler adskilles med komma.
+3. **Tekstkanal-ID** til fredagsopsummeringen.
+
+Enten i `config.json`:
+
+```json
+"torsdagsbar": {
+  "server_id": 123456789012345678,
+  "voice_channel_ids": [111111111111111111, 222222222222222222],
+  "summary_channel_id": 333333333333333333,
+  "min_minutes": 5,
+  "admin_role_name": "Torsdagsbar-admin"
+}
+```
+
+…eller i `.env`:
+
+```
+TB_SERVER_ID=123456789012345678
+TB_VOICE_CHANNEL_IDS=111111111111111111,222222222222222222
+TB_SUMMARY_CHANNEL_ID=333333333333333333
+TB_MIN_MINUTES=5
+TB_ADMIN_ROLE_NAME=Torsdagsbar-admin
+```
+
+Når det er sat rigtigt, skriver botten ved opstart:
+
+```
+Torsdagsbar aktiveret · server: ... · voicekanaler: ... · opsummering: ... · min. deltagelse: 5 min
+Torsdagsbar: /torsdagsbar-kommandoer registreret.
+Torsdagsbar: næste registrering starter torsdag ... kl. 19:00 CEST
+```
+
+### Ekstra rettigheder
+
+Botten skal ud over afstemnings-rettighederne kunne **se og læse** de valgte voicekanaler (**Vis kanal** / **View Channel** — den behøver ikke selv at kunne tale) og kunne **sende beskeder + indlejre links** i opsummeringskanalen. Ingen privilegerede intents skal slås til: `voice_states` er en del af standard-intents, så voice-registrering virker uden ændringer i Developer Portal.
+
+### Kommandoer
+
+Alle svar vises i pæne embeds. `bruger` og `periode` kan udelades.
+
+**For alle:**
+
+| Kommando | Hvad den gør |
+|---|---|
+| `/torsdagsbar stats [bruger] [periode]` | Din (eller en andens) statistik: samlet tid, antal torsdagsbarer, gennemsnit, længste enkeltdeltagelse, streak, placering + top 10. |
+| `/torsdagsbar streak [bruger]` | Nuværende og længste streak + top 10 aktive streaks. |
+| `/torsdagsbar rekorder [periode]` | Flest deltagere, længste individuelle deltagelse, længste aften, længste streaks, flest torsdagsbarer/timer. |
+| `/torsdagsbar leaderboard [sortering] [periode]` | Rangliste med blader-knapper. Sortér efter tid, antal, gennemsnit, streak, længste streak eller længste enkeltdeltagelse. |
+| `/torsdagsbar live` | Hvem der sidder i baren lige nu, hvor længe, samlet tid, og hvor længe der er tilbage. |
+
+**Perioder:** `sidste_uge`, `denne_måned`, `sidste_3_måneder`, `sidste_6_måneder`, `hele_perioden`.
+
+Eksempler:
+
+```
+/torsdagsbar stats periode:denne_måned
+/torsdagsbar stats bruger:@Christian periode:sidste_3_måneder
+/torsdagsbar leaderboard sortering:streak periode:hele_perioden
+```
+
+**Kun for administratorer** (kræver **Administrer server** eller den valgte rolle):
+
+| Kommando | Hvad den gør |
+|---|---|
+| `/torsdagsbar status` | Registreringens og databasens status + hvornår næste opsummering sendes. |
+| `/torsdagsbar opsummering dato:ÅÅÅÅ-MM-DD [gensend]` | Forhåndsvis (kun dig) eller gensend en opsummering for en tidligere torsdagsbar. |
+| `/torsdagsbar korriger bruger dato handling minutter` | Tilføj tid, sæt samlet tid, eller nulstil rettelser for en bruger (hvis botten var offline eller registrerede forkert). |
+| `/torsdagsbar aflys dato:ÅÅÅÅ-MM-DD [fortryd]` | Markér en torsdag som aflyst/ikke-statistikgivende – bryder ikke streaks. `fortryd:True` ophæver aflysningen. |
+| `/torsdagsbar genberegn` | Genberegner al statistik, streaks og rekorder ud fra de gemte sessioner. |
+
+### Sådan virker registreringen og databasen
+
+- Når en rigtig bruger tilslutter sig en registreret voicekanal **inden for vinduet**, åbnes en *session*. Når de går, lukkes den, og varigheden gemmes. Kommer de tilbage, lægges tiderne sammen.
+- **Skift mellem to registrerede kanaler** tæller ikke som at forlade baren.
+- Sad man der allerede **kl. 19:00**, tælles fra 19:00. Sidder man der stadig **kl. 03:00**, afsluttes automatisk kl. 03:00.
+- Ved **genstart** genoptages åbne sessioner for dem, der stadig sidder i kanalerne; sessioner for dem, der er gået, lukkes ved bottens sidste livstegn – så en hel aften går ikke tabt.
+- Alle tidspunkter gemmes som **UTC** i databasen og vises som **dansk lokal tid** i Discord. Bruger-ID er den permanente identifikation (navne kan ændres og gemmes ved siden af).
+- **Streaks** tælles ud fra tællende torsdagsbarer i træk, hvor man deltog mindst `min_minutes`. **Aflyste** torsdage tæller neutralt og bryder ikke en streak. Alt kan genberegnes ud fra sessionerne.
+- Databasen (`torsdagsbar.db`) oprettes automatisk ved siden af `.exe`-filen og har indekser, så statistik og leaderboard forbliver hurtige selv efter års historik.
+
+### Test af torsdagsbaren uden at vente til torsdag
+
+- Sæt midlertidigt tidsrummet, så det passer med nu – fx i `config.json` under `"torsdagsbar"`: `"start_hour"`, `"end_hour"` (og evt. `"weekday"` til dagens ugedag). Genstart botten, gå ind i en registreret voicekanal, og kør `/torsdagsbar live`.
+- Kør `/torsdagsbar opsummering dato:ÅÅÅÅ-MM-DD gensend:True` for at teste opsummeringen på en valgt dato.
+- De medfølgende automatiske tests dækker registrering, kanalskift, genstart, opsummering, streaks, rekorder, live og aflysning:
+
+```bat
+python tests\test_torsdagsbar.py
+```
+
+---
+
 ## Fejlfinding
 
 | Problem | Løsning |
@@ -483,6 +598,11 @@ EMOJI_CODEWEINER=<:codeweiner:000000000000000000>
 | `Server-emojien ... blev ikke fundet` i loggen | Emoji-ID'et er forkert, eller botten er ikke medlem af den server, emojien hører til. |
 | Konsolvinduet lukker med det samme | Start via `start_bot.bat`, eller åbn en kommandoprompt i mappen og skriv `TorsdagBot.exe`, så kan du læse fejlbeskeden. |
 | Windows Defender blokerer `.exe`-filen | Filen er ikke kodesigneret. Vælg **Flere oplysninger → Kør alligevel**, eller tilføj mappen som undtagelse. |
+| `/torsdagsbar` findes ikke i Discord | Torsdagsbaren er ikke slået til (`server_id`/`voice_channel_ids`/`summary_channel_id` mangler), eller kommandoerne er ikke synkroniseret endnu. Sæt `GUILD_ID` og genstart. |
+| Ingen voice-tid registreres | Er voicekanalens ID rigtigt (højreklik på selve **voicekanalen**)? Kan botten se kanalen (View Channel)? Er klokken inden for torsdag 19:00–fredag 03:00? |
+| Fredagsopsummeringen kom ikke | Var botten tændt fredag kl. 12:00 (inden for 6 timer)? Tjek at `summary_channel_id` er en tekstkanal, botten må skrive i. Ellers: `/torsdagsbar opsummering dato:... gensend:True`. |
+| En bruger fik forkert tid (bot var offline) | Ret med `/torsdagsbar korriger`. Var hele torsdagen aflyst: `/torsdagsbar aflys`. |
+| Vil nulstille torsdagsbar-statistikken | Luk botten og slet `torsdagsbar.db` (ved siden af `.exe`-filen). Den oprettes tom igen ved næste start. |
 
 Loggen i `torsdagbot.log` (ved siden af `.exe`-filen) indeholder alt: login, oprettede afstemninger, afgivne stemmer, manglende rettigheder og forbindelsesproblemer. Start altid fejlfindingen der.
 

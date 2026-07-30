@@ -9,6 +9,12 @@ poll_state.corrupt.json
 *.log
 *.log.*
 
+# Torsdagsbar-database (lokale deltagelsesdata)
+torsdagsbar.db
+torsdagsbar.db-wal
+torsdagsbar.db-shm
+torsdagsbar.db-journal
+
 # PyInstaller
 build/
 dist/

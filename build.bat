@@ -63,6 +63,7 @@ REM   --clean          ryd PyInstallers cache
 REM   --noconfirm      overskriv dist uden at spoerge
 REM   --collect-all tzdata   tidszone-databasen skal med i .exe-filen,
 REM                          ellers kan Europe/Copenhagen ikke slas op
+REM   --collect-submodules torsdagsbar  tag hele torsdagsbar-pakken med
 echo [4/5] Koerer PyInstaller ...
 !PY! -m PyInstaller ^
     --onefile ^
@@ -72,6 +73,7 @@ echo [4/5] Koerer PyInstaller ...
     --name TorsdagBot ^
     --collect-all tzdata ^
     --collect-submodules discord ^
+    --collect-submodules torsdagsbar ^
     --hidden-import dotenv ^
     bot.py
 if errorlevel 1 goto :fejl_build

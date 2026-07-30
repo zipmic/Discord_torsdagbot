@@ -10,3 +10,6 @@ python-dotenv>=1.0.1
 # Tidszone-database. Windows har ikke en indbygget IANA-database, så uden
 # denne pakke kan Python ikke slå "Europe/Copenhagen" op.
 tzdata>=2024.1
+
+# Bemærk: torsdagsbar-statistikken bruger SQLite, som er en del af Pythons
+# standardbibliotek (sqlite3) – der kræves altså ingen ekstra database-pakke.

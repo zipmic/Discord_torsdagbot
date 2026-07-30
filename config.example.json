@@ -16,5 +16,24 @@
   "_emoji_kommentar": ":code: og :clue: er allerede bygget ind i botten. Udfyld kun disse hvis I vil bytte til andre emojis - ellers slet linjerne.",
   "EMOJI_CODE": "<:code:887336573933334648>",
   "EMOJI_CLUE": "<:clue:1044354323561320539>",
-  "EMOJI_CODEWEINER": "<:codeweiner:000000000000000000>"
+  "EMOJI_CODEWEINER": "<:codeweiner:000000000000000000>",
+
+  "_torsdagsbar_kommentar": "Voice-registrering + statistik. Udfyld server_id, voice_channel_ids og summary_channel_id for at slaa funktionen til. Er de ikke sat, koerer afstemningen bare videre uden statistik. Alle ID'er kopieres med Developer Mode slaaet til.",
+  "torsdagsbar": {
+    "server_id": 123456789012345678,
+    "voice_channel_ids": [111111111111111111, 222222222222222222],
+    "summary_channel_id": 333333333333333333,
+    "min_minutes": 5,
+    "admin_role_name": "Torsdagsbar-admin",
+    "admin_role_id": null,
+    "leaderboard_size": 10,
+    "summary_show_records": true,
+    "start_hour": 19,
+    "start_minute": 0,
+    "end_hour": 3,
+    "end_minute": 0,
+    "summary_weekday": 4,
+    "summary_hour": 12,
+    "summary_minute": 0
+  }
 }
