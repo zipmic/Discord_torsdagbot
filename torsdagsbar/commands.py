@@ -189,7 +189,12 @@ def build_group(module) -> app_commands.Group:
         view = LeaderboardView(
             module, rows, sort_key, sort_label, label, module.config.leaderboard_size
         )
-        await interaction.followup.send(embed=view.embed(), view=view if view.pages > 1 else None)
+        # Vedhæft kun blader-knapperne, når der er mere end én side. Bemærk:
+        # discord.py accepterer ikke view=None her – parameteren skal helt udelades.
+        if view.pages > 1:
+            await interaction.followup.send(embed=view.embed(), view=view)
+        else:
+            await interaction.followup.send(embed=view.embed())
 
     # ----------------------------------------------------------- status (admin)
     @group.command(name="status", description="(Admin) Vis registreringens og databasens status.")

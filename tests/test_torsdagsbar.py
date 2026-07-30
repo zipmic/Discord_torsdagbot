@@ -405,6 +405,57 @@ async def test_streaks_records_leaderboard_cancel_corrections():
         db.close()
 
 
+async def test_leaderboard_command_send():
+    print("\n== /leaderboard-kommandoen sender uden at crashe (én og flere sider) ==")
+    from torsdagsbar.module import TorsdagsbarModule
+    from torsdagsbar.commands import build_group
+
+    class FakeResponse:
+        async def defer(self, **kw): pass
+
+    class FakeFollowup:
+        def __init__(self): self.calls = []
+        async def send(self, **kw):
+            # Efterlign discord.py: view=None er ikke tilladt.
+            if "view" in kw and kw["view"] is None:
+                raise TypeError("expected view parameter to be of type View, not NoneType")
+            self.calls.append(kw)
+
+    class FakeInteraction:
+        def __init__(self, uid):
+            self.user = FakeMember(uid, "Tester")
+            self.response = FakeResponse()
+            self.followup = FakeFollowup()
+
+    with tempfile.TemporaryDirectory() as d:
+        dbpath = Path(d) / "t.db"
+        cfg = make_config(dbpath)
+        db = Database(dbpath)
+        # Én deltager -> kun én side (den situation der crashede før)
+        db.add_manual_session(1, "Solo", date(2026, 5, 14),
+                              datetime(2026, 5, 14, 17, 0, tzinfo=timezone.utc),
+                              datetime(2026, 5, 14, 19, 0, tzinfo=timezone.utc))
+        mod = TorsdagsbarModule(FakeClient(), cfg, db)
+        mod.tracker.now = lambda: datetime(2026, 5, 20, 12, 0, tzinfo=TZ)
+        group = build_group(mod)
+        cmd = group.get_command("leaderboard")
+
+        it = FakeInteraction(1)
+        await cmd.callback(it, sortering=None, periode=None)
+        check("én side: sendt uden fejl", len(it.followup.calls) == 1)
+        check("én side: ingen view vedhæftet", "view" not in it.followup.calls[0])
+
+        # Mange deltagere -> flere sider -> view SKAL med
+        for uid in range(2, 20):
+            db.add_manual_session(uid, f"Bruger{uid}", date(2026, 5, 14),
+                                  datetime(2026, 5, 14, 17, 0, tzinfo=timezone.utc),
+                                  datetime(2026, 5, 14, 17, 0, tzinfo=timezone.utc) + timedelta(minutes=uid * 6))
+        it2 = FakeInteraction(1)
+        await cmd.callback(it2, sortering=None, periode=None)
+        check("flere sider: view vedhæftet", it2.followup.calls[0].get("view") is not None)
+        db.close()
+
+
 async def main():
     await test_basic_registration()
     await test_channel_switch()
@@ -413,6 +464,7 @@ async def main():
     await test_live_status()
     await test_summary_once()
     await test_streaks_records_leaderboard_cancel_corrections()
+    await test_leaderboard_command_send()
     print("\nALLE TORSDAGSBAR-TESTS BESTÅET ✅")
 
 
