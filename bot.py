@@ -28,6 +28,7 @@ import logging
 import os
 import re
 import sys
+import time
 from dataclasses import dataclass, field
 from datetime import date, datetime, time as dt_time, timedelta
 from logging.handlers import RotatingFileHandler
@@ -724,7 +725,10 @@ class TorsdagBot(discord.Client):
         intents.presences = False
         intents.voice_states = True  # nødvendig for torsdagsbar-registreringen
 
-        super().__init__(intents=intents)
+        # enable_debug_events gør, at on_socket_raw_receive udløses for hver
+        # gateway-besked (inkl. heartbeat-svar). Det bruger watchdog'en til at
+        # opdage en "død" forbindelse, hvor .exe'en kører, men botten er offline.
+        super().__init__(intents=intents, enable_debug_events=True)
 
         self.config = config
         self.state = state
@@ -736,6 +740,12 @@ class TorsdagBot(discord.Client):
         self._retry_not_before: Optional[datetime] = None
         self._ready_logged = False
         self._emoji_cache: dict[str, Optional[discord.PartialEmoji]] = {}
+
+        # Watchdog-tilstand: tidspunkt (monotonisk) for seneste livstegn fra
+        # Discord, og et flag der beder run_forever om at genforbinde efter en
+        # tvunget lukning i stedet for at stoppe helt.
+        self._last_gateway_rx: Optional[float] = None
+        self.force_reconnect = False
 
         # Torsdagsbar-modulet (voice-registrering + statistik). Databasen deles
         # på tværs af genforbindelser, mens modulet genskabes pr. klient.
@@ -779,9 +789,11 @@ class TorsdagBot(discord.Client):
             log.error("Kunne ikke synkronisere slash-kommandoer: %s", exc)
 
         self.scheduler_loop.start()
+        self.connection_watchdog.start()
 
     async def on_ready(self) -> None:
         # on_ready kan blive kaldt flere gange (efter reconnect).
+        self._last_gateway_rx = time.monotonic()
         log.info("Logget ind som %s (ID: %s)", self.user, getattr(self.user, "id", "?"))
         if not self._ready_logged:
             self._ready_logged = True
@@ -821,6 +833,8 @@ class TorsdagBot(discord.Client):
         """Stop planlæggeren pænt, så den ikke kører videre på en lukket klient."""
         if self.scheduler_loop.is_running():
             self.scheduler_loop.cancel()
+        if self.connection_watchdog.is_running():
+            self.connection_watchdog.cancel()
         if self.torsdagsbar is not None:
             try:
                 await self.torsdagsbar.close()
@@ -828,13 +842,58 @@ class TorsdagBot(discord.Client):
                 log.debug("Fejl under lukning af torsdagsbar-modulet", exc_info=True)
         await super().close()
 
+    # -- forbindelses-watchdog ---------------------------------------------
+    async def on_socket_raw_receive(self, msg: Any) -> None:
+        """Udløses for hver gateway-besked (kræver enable_debug_events).
+
+        Vi bruger den kun som "livstegn": så længe der kommer beskeder – og
+        Discord sender heartbeat-svar hvert ~41. sekund – ved vi, forbindelsen
+        lever."""
+        self._last_gateway_rx = time.monotonic()
+
+    @tasks.loop(seconds=45)
+    async def connection_watchdog(self) -> None:
+        """Tving en frisk genforbindelse, hvis forbindelsen er død.
+
+        Håndterer det tilfælde, hvor .exe'en kører, men botten er offline, fordi
+        gateway-forbindelsen er "frosset" (fx efter dvale eller et netværksdrop),
+        og discord.py's egen genforbindelse er gået i stå.
+        """
+        try:
+            if self.is_closed() or self.force_reconnect:
+                return
+            last = self._last_gateway_rx
+            if last is None:
+                return  # endnu ikke forbundet – lad opstarten køre færdig
+            gap = time.monotonic() - last
+            if gap > 150:  # ~3-4 manglende heartbeats
+                log.error(
+                    "Intet livstegn fra Discord i %.0f sekunder – forbindelsen ser "
+                    "død ud. Tvinger en frisk genforbindelse.",
+                    gap,
+                )
+                self.force_reconnect = True
+                # Luk i en separat task, så watchdog'en ikke aflyser sig selv midt
+                # i sit eget kald. Når close() er færdig, returnerer bot.start(),
+                # og run_forever bygger en ny klient.
+                asyncio.create_task(self.close())
+        except Exception:
+            log.debug("Fejl i connection_watchdog", exc_info=True)
+
+    @connection_watchdog.before_loop
+    async def _before_watchdog(self) -> None:
+        await self.wait_until_ready()
+        self._last_gateway_rx = time.monotonic()
+
     async def on_connect(self) -> None:
+        self._last_gateway_rx = time.monotonic()
         log.info("Forbundet til Discord.")
 
     async def on_disconnect(self) -> None:
         log.warning("Forbindelsen til Discord blev afbrudt – forsøger at genoprette ...")
 
     async def on_resumed(self) -> None:
+        self._last_gateway_rx = time.monotonic()
         log.info("Forbindelsen til Discord er genoprettet.")
 
     async def on_error(self, event_method: str, /, *args: Any, **kwargs: Any) -> None:
@@ -1315,8 +1374,15 @@ async def run_forever(
         startet = datetime.now()
         try:
             await bot.start(config.token, reconnect=True)
-            log.info("Botten blev lukket normalt.")
-            return
+            # start() returnerede: enten en normal lukning, eller watchdog'en
+            # tvang en genforbindelse (force_reconnect).
+            if bot.force_reconnect:
+                log.warning("Watchdog tvang en genforbindelse – bygger ny forbindelse.")
+                backoff = 5
+                # Fald igennem til ventetid + ny runde i løkken.
+            else:
+                log.info("Botten blev lukket normalt.")
+                return
 
         except discord.LoginFailure:
             log.error(
