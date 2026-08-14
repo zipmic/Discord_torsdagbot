@@ -154,7 +154,13 @@ class TorsdagsbarModule:
                 s.duration_seconds = max(0, int((provisional - joined_local).total_seconds()))
         nights = await asyncio.to_thread(self.db.load_nights)
         corrections = await asyncio.to_thread(self.db.load_corrections, None, None, None)
-        return Engine(sessions, nights, corrections, self.config.min_seconds)
+        return Engine(
+            sessions,
+            nights,
+            corrections,
+            self.config.min_seconds,
+            require_company=self.config.require_company,
+        )
 
     # -- navneopslag --------------------------------------------------------
     def name_of(self, user_id: int) -> str:

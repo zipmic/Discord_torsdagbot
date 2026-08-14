@@ -86,7 +86,7 @@ class FakeClient:
         return FakeGuild(gid)
 
 
-def make_config(db_path, min_minutes=5):
+def make_config(db_path, min_minutes=5, require_company=True):
     return TorsdagsbarConfig(
         enabled=True,
         server_id=SERVER,
@@ -96,6 +96,7 @@ def make_config(db_path, min_minutes=5):
         min_minutes=min_minutes,
         tick_seconds=30,
         db_path=db_path,
+        require_company=require_company,
     )
 
 
@@ -151,7 +152,9 @@ async def test_basic_registration():
     print("\n== Grundlæggende registrering + minimum + botfiltrering ==")
     with tempfile.TemporaryDirectory() as d:
         db = Database(Path(d) / "t.db")
-        cfg = make_config(Path(d) / "t.db")
+        # Denne test handler om tracking + minimum + botfiltrering, ikke om
+        # selskabsreglen, så vi slår den fra her.
+        cfg = make_config(Path(d) / "t.db", require_company=False)
         h = Harness(db, cfg)
         chA = h.client.channels[CH_A]
 
@@ -173,7 +176,8 @@ async def test_basic_registration():
         h.set_now(datetime(2026, 5, 14, 20, 3, tzinfo=TZ))
         await h.leave(kort, chA)
 
-        eng = Engine(db.load_sessions(), db.load_nights(), db.load_corrections(), cfg.min_seconds)
+        eng = Engine(db.load_sessions(), db.load_nights(), db.load_corrections(),
+                     cfg.min_seconds, require_company=cfg.require_company)
         ns = eng.night_summary("2026-05-14")
         names = {u for u, _ in ns.participants}
         check("Christian med i opsummering", 11 in names)
@@ -301,7 +305,8 @@ async def test_live_status():
     print("\n== Live-status ==")
     with tempfile.TemporaryDirectory() as d:
         dbpath = Path(d) / "t.db"
-        cfg = make_config(dbpath)
+        # Tester live-mekanikken (tid tilbage, tælling), ikke selskabsreglen.
+        cfg = make_config(dbpath, require_company=False)
         db = Database(dbpath)
         h = Harness(db, cfg)
         chA = h.client.channels[CH_A]
@@ -369,7 +374,9 @@ async def test_streaks_records_leaderboard_cancel_corrections():
     print("\n== Streaks, rekorder, leaderboard, aflysning, rettelser (E2E via DB) ==")
     with tempfile.TemporaryDirectory() as d:
         dbpath = Path(d) / "t.db"
-        cfg = make_config(dbpath)
+        # Tester streak/rekord/leaderboard-logikken med enkeltbrugere pr. nat;
+        # selskabsreglen testes separat, så den slås fra her.
+        cfg = make_config(dbpath, require_company=False)
         db = Database(dbpath)
 
         def manual(uid, name, day, hours):
@@ -383,7 +390,7 @@ async def test_streaks_records_leaderboard_cancel_corrections():
         manual(2, "Emil", 7, 1.5); manual(2, "Emil", 14, 3); manual(2, "Emil", 28, 0.2)
         manual(4, "Alex", 14, 5)               # rekord enkeltsession
 
-        eng = Engine(db.load_sessions(), db.load_nights(), db.load_corrections(), cfg.min_seconds)
+        eng = Engine(db.load_sessions(), db.load_nights(), db.load_corrections(), cfg.min_seconds, require_company=cfg.require_company)
         check("Christian streak 4", eng.streak(1).current == 4)
         rec = eng.records()
         check("længste enkelt = Alex 5t", rec["longest_single"]["sessions"][0].user_id == 4)
@@ -392,14 +399,14 @@ async def test_streaks_records_leaderboard_cancel_corrections():
 
         # Aflys 21/5: Christian streak må ikke brydes (han var der, men natten bliver neutral)
         db.set_cancelled(date(2026, 5, 21), True, "test")
-        eng = Engine(db.load_sessions(), db.load_nights(), db.load_corrections(), cfg.min_seconds)
+        eng = Engine(db.load_sessions(), db.load_nights(), db.load_corrections(), cfg.min_seconds, require_company=cfg.require_company)
         check("21/5 ikke længere tællende", "2026-05-21" not in eng.counting_dates)
         check("Christian streak nu 3 (21 neutral)", eng.streak(1).current == 3)
 
         # Manuel rettelse: giv Emil +40 min den 28/5 så han når over noget
         before = eng._qualifiers("2026-05-28").get(2, 0)
         db.add_correction(2, date(2026, 5, 28), 40 * 60, "glemt", 9999)
-        eng = Engine(db.load_sessions(), db.load_nights(), db.load_corrections(), cfg.min_seconds)
+        eng = Engine(db.load_sessions(), db.load_nights(), db.load_corrections(), cfg.min_seconds, require_company=cfg.require_company)
         after = eng._qualifiers("2026-05-28").get(2, 0)
         check("rettelse lagt til Emils tid", after == before + 40 * 60)
         db.close()
@@ -461,7 +468,8 @@ async def test_live_counts_in_leaderboard():
     from torsdagsbar.module import TorsdagsbarModule
     with tempfile.TemporaryDirectory() as d:
         dbpath = Path(d) / "t.db"
-        cfg = make_config(dbpath)
+        # Tester at åbne (live) sessioner medregnes; selskabsreglen testes separat.
+        cfg = make_config(dbpath, require_company=False)
         db = Database(dbpath)
         h = Harness(db, cfg)
         chA = h.client.channels[CH_A]
@@ -492,6 +500,77 @@ async def test_live_counts_in_leaderboard():
         db.close()
 
 
+async def test_company_gating():
+    print("\n== Kun tid MED selskab tæller (anti-solo-farming) ==")
+    with tempfile.TemporaryDirectory() as d:
+        dbpath = Path(d) / "t.db"
+        cfg = make_config(dbpath)
+        db = Database(dbpath)
+
+        def sess(uid, name, day, jh, jm, lh, lm):
+            j = datetime(2026, 5, day, jh, jm, tzinfo=timezone.utc)
+            l = datetime(2026, 5, day, lh, lm, tzinfo=timezone.utc)
+            db.add_manual_session(uid, name, date(2026, 5, day), j, l, source="auto")
+
+        # 14/5: Christian sidder 17-21 (4t), men Emil er der kun 18:00-18:30 (30 min)
+        sess(1, "Christian", 14, 17, 0, 21, 0)
+        sess(2, "Emil", 14, 18, 0, 18, 30)
+        # 21/5: Alex HELT alene 17-22 (5t solo) -> skal give 0
+        sess(4, "Alex", 21, 17, 0, 22, 0)
+
+        eng = Engine(db.load_sessions(), db.load_nights(), db.load_corrections(), cfg.min_seconds, require_company=cfg.require_company)
+        # Christian optjener kun de 30 min hvor Emil også var der
+        check("Christian optjener kun 30 min (med selskab)", eng.night_user["2026-05-14"].get(1) == 1800)
+        check("Emil optjener 30 min", eng.night_user["2026-05-14"].get(2) == 1800)
+        # Alex helt alene -> 0 -> under minimum -> ikke tællende nat
+        check("Alex (solo hele aftenen) optjener 0", eng.night_user.get("2026-05-21", {}).get(4, 0) == 0)
+        check("solo-nat 21/5 er IKKE en tællende nat", "2026-05-21" not in eng.counting_dates)
+
+        # Leaderboard: kun Christian+Emil, ikke Alex
+        lb = eng.leaderboard("tid")
+        ids = {r.user_id for r in lb}
+        check("Alex ikke på leaderboard (kun solo-tid)", 4 not in ids)
+        check("Christian+Emil på leaderboard", 1 in ids and 2 in ids)
+
+        # RETROAKTIVT: gammel solo-data giver 0 uden migrering
+        check("retroaktiv: solo-nat giver 0 timer", eng.user_stats(4).total_seconds == 0)
+
+        # require_company=False -> gammel adfærd (solo tæller)
+        eng_off = Engine(db.load_sessions(), db.load_nights(), db.load_corrections(),
+                         cfg.min_seconds, require_company=False)
+        check("uden krav: Alex' 5 solo-timer tæller", eng_off.night_user["2026-05-21"].get(4) == 5 * 3600)
+        db.close()
+
+
+async def test_live_company_gating():
+    print("\n== Live: solo giver 0 optjent, men vises stadig som online ==")
+    with tempfile.TemporaryDirectory() as d:
+        dbpath = Path(d) / "t.db"
+        cfg = make_config(dbpath)
+        db = Database(dbpath)
+        h = Harness(db, cfg)
+        chA = h.client.channels[CH_A]
+        per = FakeMember(81, "SoloPer")
+
+        h.set_now(datetime(2026, 5, 14, 20, 0, tzinfo=TZ))
+        await h.join(per, chA)
+        h.set_now(datetime(2026, 5, 14, 21, 0, tzinfo=TZ))  # 1 time alene
+        status = await h.tracker.live_status()
+        online = {o["user_id"]: o for o in status["online"]}
+        check("SoloPer vises som online", 81 in online)
+        check("men optjent tid = 0 (ingen selskab)", online[81]["seconds"] == 0)
+
+        # Nu kommer en anden ind -> begge begynder at optjene
+        ven = FakeMember(82, "Ven")
+        await h.join(ven, chA)
+        h.set_now(datetime(2026, 5, 14, 21, 30, tzinfo=TZ))  # 30 min sammen
+        status2 = await h.tracker.live_status()
+        online2 = {o["user_id"]: o for o in status2["online"]}
+        check("SoloPer optjener nu 30 min (selskab)", online2[81]["seconds"] == 30 * 60)
+        check("Ven optjener 30 min", online2[82]["seconds"] == 30 * 60)
+        db.close()
+
+
 async def main():
     await test_basic_registration()
     await test_channel_switch()
@@ -502,6 +581,8 @@ async def main():
     await test_streaks_records_leaderboard_cancel_corrections()
     await test_leaderboard_command_send()
     await test_live_counts_in_leaderboard()
+    await test_company_gating()
+    await test_live_company_gating()
     print("\nALLE TORSDAGSBAR-TESTS BESTÅET ✅")
 
 

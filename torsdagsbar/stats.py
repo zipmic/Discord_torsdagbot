@@ -18,10 +18,89 @@ Vigtige regler:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 from .database import Correction, Night, Session
+
+
+# ---------------------------------------------------------------------------
+# Selskabs-beregning ("man optjener kun tid, når andre også er til stede")
+# ---------------------------------------------------------------------------
+def _merge_intervals(
+    intervals: list[tuple[datetime, datetime]]
+) -> list[tuple[datetime, datetime]]:
+    """Slå en enkelt brugers (evt. overlappende) intervaller sammen til
+    disjunkte intervaller, så brugeren aldrig tælles som "to personer"."""
+    ivs = sorted((s, e) for s, e in intervals if e > s)
+    merged: list[tuple[datetime, datetime]] = []
+    for s, e in ivs:
+        if merged and s <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], e))
+        else:
+            merged.append((s, e))
+    return merged
+
+
+def companioned_night(
+    user_intervals: dict[int, list[tuple[datetime, datetime]]]
+) -> dict[int, tuple[int, int, Optional[datetime], Optional[datetime]]]:
+    """Beregn "tid med selskab" for hver bruger en enkelt aften.
+
+    En brugers tid tælles kun i de øjeblikke, hvor MINDST ÉN anden rigtig bruger
+    også er til stede i baren samtidig. Det udregnes ved at finde de tidsrum,
+    hvor mindst to distinkte brugere er til stede (≥2), og skære hver brugers
+    tilstedeværelse ned til de tidsrum.
+
+    Input:  {user_id: [(start, slut), ...]}  (tz-aware datetimes)
+    Output: {user_id: (total_sek, længste_sammenhængende_sek, start, slut)}
+    """
+    # 1) Slå hver brugers intervaller sammen (så én bruger = højst +1 ad gangen).
+    merged = {uid: _merge_intervals(ivs) for uid, ivs in user_intervals.items()}
+
+    # 2) Sweep: find tidsrum hvor ≥2 distinkte brugere er til stede.
+    events: list[tuple[datetime, int]] = []
+    for ivs in merged.values():
+        for s, e in ivs:
+            events.append((s, 1))
+            events.append((e, -1))
+    events.sort(key=lambda x: x[0])
+
+    social: list[tuple[datetime, datetime]] = []
+    count = 0
+    social_start: Optional[datetime] = None
+    for t, delta in events:
+        prev = count
+        count += delta
+        if prev < 2 <= count:
+            social_start = t
+        elif prev >= 2 > count and social_start is not None:
+            social.append((social_start, t))
+            social_start = None
+
+    # 3) Skær hver brugers tilstedeværelse ned til de "sociale" tidsrum.
+    result: dict[int, tuple[int, int, Optional[datetime], Optional[datetime]]] = {}
+    for uid, ivs in merged.items():
+        total = timedelta()
+        best = timedelta()
+        best_span: tuple[Optional[datetime], Optional[datetime]] = (None, None)
+        for s, e in ivs:
+            for ss, se in social:
+                lo = max(s, ss)
+                hi = min(e, se)
+                if hi > lo:
+                    dur = hi - lo
+                    total += dur
+                    if dur > best:
+                        best = dur
+                        best_span = (lo, hi)
+        result[uid] = (
+            int(total.total_seconds()),
+            int(best.total_seconds()),
+            best_span[0],
+            best_span[1],
+        )
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -51,6 +130,19 @@ class UserStats:
     longest_streak: int = 0
     rank: Optional[int] = None
     participants_in_period: int = 0
+
+
+@dataclass
+class StretchRecord:
+    """Længste sammenhængende "med selskab"-stræk for en bruger en aften.
+
+    Har de samme felter, som formatteringen forventer af en session, så den kan
+    genbruges direkte i rekord-embed'en."""
+    user_id: int
+    bar_date: str
+    duration_seconds: int
+    joined_at: Optional[datetime]
+    left_at: Optional[datetime]
 
 
 @dataclass
@@ -102,10 +194,15 @@ class Engine:
         nights: dict[str, Night],
         corrections: list[Correction],
         min_seconds: int,
+        require_company: bool = True,
     ) -> None:
-        self.sessions = [s for s in sessions if s.duration_seconds is not None]
+        self.sessions = [
+            s for s in sessions if s.duration_seconds is not None and s.left_at is not None
+        ]
         self.nights = nights
         self.min_seconds = max(0, int(min_seconds))
+        # Når True tælles kun tid, hvor mindst én ANDEN bruger var til stede.
+        self.require_company = require_company
 
         self.cancelled: set[str] = {d for d, n in nights.items() if n.cancelled}
 
@@ -115,13 +212,39 @@ class Engine:
             if s.display_name:
                 self.names[s.user_id] = s.display_name
 
-        # Nat-totaler: {bar_date: {user_id: sekunder}} (før minimumsfilter).
-        self.night_user: dict[str, dict[int, int]] = {}
+        # Saml sessionernes intervaller pr. nat og bruger.
+        intervals_by_night: dict[str, dict[int, list[tuple[datetime, datetime]]]] = {}
         for s in self.sessions:
-            self.night_user.setdefault(s.bar_date, {})
-            self.night_user[s.bar_date][s.user_id] = (
-                self.night_user[s.bar_date].get(s.user_id, 0) + int(s.duration_seconds)
-            )
+            night = intervals_by_night.setdefault(s.bar_date, {})
+            night.setdefault(s.user_id, []).append((s.joined_at, s.left_at))
+
+        # Nat-totaler {bar_date: {user_id: sekunder}} og længste sammenhængende
+        # "med selskab"-stræk {bar_date: {user_id: (sek, start, slut)}}.
+        self.night_user: dict[str, dict[int, int]] = {}
+        self.night_user_longest: dict[str, dict[int, tuple[int, datetime, datetime]]] = {}
+        for bar_date, users in intervals_by_night.items():
+            if self.require_company:
+                comp = companioned_night(users)
+                totals = {uid: v[0] for uid, v in comp.items()}
+                longest = {
+                    uid: (v[1], v[2], v[3])
+                    for uid, v in comp.items()
+                    if v[1] > 0 and v[2] is not None and v[3] is not None
+                }
+            else:
+                # Uden selskabskrav: rå summer + hele intervaller som "stræk".
+                totals = {}
+                longest = {}
+                for uid, ivs in users.items():
+                    merged = _merge_intervals(ivs)
+                    totals[uid] = int(sum((e - s).total_seconds() for s, e in merged))
+                    if merged:
+                        s, e = max(merged, key=lambda iv: iv[1] - iv[0])
+                        longest[uid] = (int((e - s).total_seconds()), s, e)
+            self.night_user[bar_date] = totals
+            self.night_user_longest[bar_date] = longest
+
+        # Læg manuelle rettelser oveni nat-totalerne.
         for c in corrections:
             self.night_user.setdefault(c.bar_date, {})
             self.night_user[c.bar_date][c.user_id] = (
@@ -231,17 +354,16 @@ class Engine:
             stats.nights += 1
         stats.average_seconds = stats.total_seconds / stats.nights if stats.nights else 0.0
 
-        # Længste enkeltstående session i perioden.
-        for s in self.sessions:
-            if s.user_id != user_id or s.duration_seconds is None:
+        # Længste sammenhængende "med selskab"-stræk i perioden.
+        for bar_date, per_user in self.night_user_longest.items():
+            if bar_date in self.cancelled or not self._in_period(bar_date, start, end):
                 continue
-            if s.bar_date in self.cancelled or not self._in_period(s.bar_date, start, end):
-                continue
-            if s.duration_seconds > stats.longest_single_seconds:
-                stats.longest_single_seconds = int(s.duration_seconds)
-                stats.longest_single_date = s.bar_date
-                stats.longest_single_start = s.joined_at
-                stats.longest_single_end = s.left_at
+            entry = per_user.get(user_id)
+            if entry and entry[0] > stats.longest_single_seconds:
+                stats.longest_single_seconds = int(entry[0])
+                stats.longest_single_date = bar_date
+                stats.longest_single_start = entry[1]
+                stats.longest_single_end = entry[2]
 
         streak = self.streak(user_id)
         stats.current_streak = streak.current
@@ -447,18 +569,18 @@ class Engine:
             "holders": night_total_holders,
         }
 
-        # Længste individuelle (enkelt-)session.
+        # Længste sammenhængende "med selskab"-stræk (individuel deltagelse).
         best_single = 0
-        single_holders: list[Session] = []
-        for s in self.sessions:
-            if s.duration_seconds is None or s.bar_date in self.cancelled:
+        single_holders: list[StretchRecord] = []
+        for bar_date, per_user in self.night_user_longest.items():
+            if bar_date in self.cancelled or not self._in_period(bar_date, start, end):
                 continue
-            if not self._in_period(s.bar_date, start, end):
-                continue
-            if s.duration_seconds > best_single:
-                best_single, single_holders = int(s.duration_seconds), [s]
-            elif s.duration_seconds == best_single and best_single > 0:
-                single_holders.append(s)
+            for uid, (sec, s_start, s_end) in per_user.items():
+                if sec > best_single:
+                    best_single = int(sec)
+                    single_holders = [StretchRecord(uid, bar_date, int(sec), s_start, s_end)]
+                elif sec == best_single and sec > 0:
+                    single_holders.append(StretchRecord(uid, bar_date, int(sec), s_start, s_end))
         rec["longest_single"] = {"seconds": best_single, "sessions": single_holders}
 
         # Længste aktive streak / længste streak nogensinde (fuld historik).

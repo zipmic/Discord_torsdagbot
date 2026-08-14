@@ -24,6 +24,7 @@
     "voice_channel_ids": [111111111111111111, 222222222222222222],
     "summary_channel_id": 333333333333333333,
     "min_minutes": 5,
+    "require_company": true,
     "admin_role_name": "Torsdagsbar-admin",
     "admin_role_id": null,
     "leaderboard_size": 10,

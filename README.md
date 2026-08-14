@@ -496,6 +496,7 @@ Enten i `config.json`:
   "voice_channel_ids": [111111111111111111, 222222222222222222],
   "summary_channel_id": 333333333333333333,
   "min_minutes": 5,
+  "require_company": true,
   "admin_role_name": "Torsdagsbar-admin"
 }
 ```
@@ -559,7 +560,8 @@ Eksempler:
 ### Sådan virker registreringen og databasen
 
 - Når en rigtig bruger tilslutter sig en registreret voicekanal **inden for vinduet**, åbnes en *session*. Når de går, lukkes den, og varigheden gemmes. Kommer de tilbage, lægges tiderne sammen.
-- **Skift mellem to registrerede kanaler** tæller ikke som at forlade baren.
+- **Man optjener kun tid, mens der er selskab** — altså kun i de øjeblikke, hvor mindst én **anden** rigtig bruger også er i baren samtidig. Sidder man helt alene, tælles den tid ikke (så man ikke bare kan joine og "farme" point). Reglen kan slås fra med `require_company: false`. Fordi tiden altid **genberegnes ud fra sessionerne**, gælder reglen også **bagud i historikken** — gammel solo-tid falder automatisk væk, uden nogen migrering.
+- **Skift mellem to registrerede kanaler** tæller ikke som at forlade baren. (Bemærk: "selskab" måles på tværs af alle de registrerede voicekanaler — er I i hver jeres kanal, tæller det stadig som selskab.)
 - Sad man der allerede **kl. 19:00**, tælles fra 19:00. Sidder man der stadig **kl. 03:00**, afsluttes automatisk kl. 03:00.
 - Ved **genstart** genoptages åbne sessioner for dem, der stadig sidder i kanalerne; sessioner for dem, der er gået, lukkes ved bottens sidste livstegn – så en hel aften går ikke tabt.
 - Alle tidspunkter gemmes som **UTC** i databasen og vises som **dansk lokal tid** i Discord. Bruger-ID er den permanente identifikation (navne kan ændres og gemmes ved siden af).

@@ -28,6 +28,7 @@ import discord
 from .config import TorsdagsbarConfig
 from .database import Database
 from .period import clamp
+from .stats import companioned_night
 
 log = logging.getLogger("torsdagbot.torsdagsbar.tracker")
 
@@ -317,31 +318,49 @@ class VoiceTracker:
             corr_total_by_user[c.user_id] = corr_total_by_user.get(c.user_id, 0) + c.delta_seconds
 
         present = self._present_members()
-        per_user: dict[int, dict] = {}
+
+        # Byg intervaller pr. bruger; åbne sessioner løber til "nu" (klampet).
+        user_intervals: dict[int, list[tuple]] = {}
+        names: dict[int, str] = {}
+        joined_at: dict[int, object] = {}
+        channels: dict[int, int] = {}
         for s in sessions:
-            u = per_user.setdefault(s.user_id, {"seconds": 0, "name": s.display_name, "channel_id": s.channel_id, "joined_at": None})
-            if s.left_at is not None:
-                u["seconds"] += int(s.duration_seconds or 0)
-            else:
-                # Åben session: medregn tiden indtil nu (klampet til vinduet).
-                live_end = clamp(now, s.joined_at.astimezone(self.tz), end)
-                u["seconds"] += max(0, int((live_end - s.joined_at.astimezone(self.tz)).total_seconds()))
-                u["joined_at"] = s.joined_at
-                u["channel_id"] = s.channel_id
-            u["name"] = s.display_name
+            js = s.joined_at.astimezone(self.tz)
+            je = (s.left_at.astimezone(self.tz) if s.left_at is not None
+                  else clamp(now, js, end))
+            if je > js:
+                user_intervals.setdefault(s.user_id, []).append((js, je))
+            names[s.user_id] = s.display_name
+            if s.left_at is None:
+                joined_at[s.user_id] = s.joined_at
+                channels[s.user_id] = s.channel_id
+
+        # Optjent tid = kun tid med selskab (samme regel som statistikken).
+        if self.config.require_company:
+            comp = companioned_night(user_intervals)
+            earned = {uid: v[0] for uid, v in comp.items()}
+        else:
+            earned = {
+                uid: int(sum((e - s).total_seconds() for s, e in ivs))
+                for uid, ivs in user_intervals.items()
+            }
         for uid, extra in corr_total_by_user.items():
-            if uid in per_user:
-                per_user[uid]["seconds"] = max(0, per_user[uid]["seconds"] + extra)
+            if uid in earned or extra:
+                earned[uid] = max(0, earned.get(uid, 0) + extra)
+
+        per_user: dict[int, dict] = {
+            uid: {"seconds": earned.get(uid, 0), "name": names.get(uid, str(uid))}
+            for uid in set(list(user_intervals) + list(earned))
+        }
 
         online = []
         for uid, (member, channel_id) in present.items():
-            info = per_user.get(uid, {"seconds": 0})
             online.append({
                 "user_id": uid,
                 "name": member.display_name,
                 "channel_id": channel_id,
-                "joined_at": info.get("joined_at"),
-                "seconds": info.get("seconds", 0),
+                "joined_at": joined_at.get(uid),
+                "seconds": earned.get(uid, 0),
             })
         online.sort(key=lambda x: -x["seconds"])
 
@@ -353,7 +372,7 @@ class VoiceTracker:
             "end": end,
             "online": online,
             "current_count": len(online),
-            "unique_count": len(per_user),
-            "total_seconds": sum(u["seconds"] for u in per_user.values()),
+            "unique_count": len(user_intervals),
+            "total_seconds": sum(earned.values()),
             "time_left": end - now,
         }

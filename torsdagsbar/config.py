@@ -42,6 +42,8 @@ class TorsdagsbarConfig:
     leaderboard_size: int = 10
     summary_show_records: bool = True
     summary_catch_up_hours: int = 6
+    # Når True optjenes tid kun, mens mindst én ANDEN bruger også er i baren.
+    require_company: bool = True
 
     # Sekunder mellem trackerens periodiske tjek (heartbeat, 19:00/03:00-grænser).
     tick_seconds: int = 30
@@ -179,6 +181,7 @@ def load_torsdagsbar_config(
     leaderboard_size = geti("leaderboard_size", "TB_LEADERBOARD_SIZE", 10)
     leaderboard_size = max(1, min(leaderboard_size, 25))
     show_records = _as_bool(get("summary_show_records", "TB_SUMMARY_SHOW_RECORDS"), True)
+    require_company = _as_bool(get("require_company", "TB_REQUIRE_COMPANY"), True)
     catch_up = geti("summary_catch_up_hours", "TB_SUMMARY_CATCH_UP_HOURS", 6)
     tick_seconds = geti("tick_seconds", "TB_TICK_SECONDS", 30)
     tick_seconds = max(10, min(tick_seconds, 300))
@@ -223,6 +226,7 @@ def load_torsdagsbar_config(
         leaderboard_size=leaderboard_size,
         summary_show_records=show_records,
         summary_catch_up_hours=catch_up,
+        require_company=require_company,
         tick_seconds=tick_seconds,
         db_path=db_path,
         guild_id=guild_id,
