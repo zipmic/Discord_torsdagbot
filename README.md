@@ -56,6 +56,7 @@ Botten er skrevet i Python med [discord.py](https://discordpy.readthedocs.io/) o
 - ✅ Bruger **Discords indbyggede poll-funktion** (discord.py 2.5+). Kan ikke den bruges, skifter botten automatisk til **knapper med persistente Views**.
 - ✅ Knapper: alle kan stemme, hver person har **ét aktivt svar**, man kan **skifte svar**, **stemmetallene vises i beskeden**, stemmerne **gemmes lokalt** og **knapperne virker stadig efter en genstart**.
 - ✅ Ejerbeskyttet testkommando **`/testvote`**.
+- ✅ **`/erdettorsdag`** – livets vigtigste spørgsmål. Svarer `:D` om torsdagen og `:(` alle andre dage.
 - ✅ Tydelig logning i konsollen og i `torsdagbot.log`.
 - ✅ **Automatisk genforbindelse** hvis internettet eller Discord falder ud.
 - ✅ Tokenet står **aldrig** i kildekoden – kun i `.env`.

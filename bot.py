@@ -293,6 +293,9 @@ CUSTOM_EMOJI_RE = re.compile(r"^<(a?):([A-Za-z0-9_]{2,32}):(\d{15,25})>$")
 # ellers virker persistente Views ikke.
 CUSTOM_ID_PREFIX = "torsdagbot:vote:"
 
+# Torsdag som ugedagsnummer (datetime.weekday(): 0 = mandag).
+TORSDAG = 3
+
 
 def option_by_key(key: str) -> Optional[PollOption]:
     for option in POLL_OPTIONS:
@@ -1406,6 +1409,17 @@ class TorsdagBot(discord.Client):
                 "Den ugentlige afstemning og beskedrotationen er uændret.",
                 ephemeral=True,
             )
+
+        @self.tree.command(
+            name="erdettorsdag",
+            description="Er det torsdag?",
+        )
+        async def erdettorsdag(interaction: discord.Interaction) -> None:
+            # Spørgsmålet handler om torsdag – ikke om hvilken dag afstemningen
+            # er sat til – så vi tjekker den rigtige ugedag i dansk tid,
+            # uanset hvor i verden botten kører.
+            er_torsdag = self.now().weekday() == TORSDAG
+            await interaction.response.send_message(":D" if er_torsdag else ":(")
 
         @self.tree.error
         async def on_app_command_error(
