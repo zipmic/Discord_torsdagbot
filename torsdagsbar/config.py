@@ -45,6 +45,25 @@ class TorsdagsbarConfig:
     # Når True optjenes tid kun, mens mindst én ANDEN bruger også er i baren.
     require_company: bool = True
 
+    # --- Stemmefangst -----------------------------------------------------
+    # Sekunder mellem hver hentning af stemmer fra Discords indbyggede poll.
+    vote_sync_seconds: int = 180
+
+    # --- "Du er sent på den" ---------------------------------------------
+    late_enabled: bool = True
+    # Kanal til forsinkelsesbeskeder. None = brug opsummeringskanalen.
+    late_channel_id: Optional[int] = None
+    # Hvor længe efter deadline en forsinkelsesbesked stadig må sendes, så en
+    # bot der starter sent ikke spammer med timegamle forsinkelser.
+    late_grace_minutes: int = 90
+
+    # --- Aftentitler ------------------------------------------------------
+    # Grænse for 🏃 Marathonmand (timer) og ⚡ Speedrun (minutter).
+    marathon_hours: float = 5.0
+    speedrun_min_minutes: int = 10
+    # Hvor mange timer efter løftets slut man får 🤥 Store ord.
+    big_words_hours: float = 2.0
+
     # Sekunder mellem trackerens periodiske tjek (heartbeat, 19:00/03:00-grænser).
     tick_seconds: int = 30
 
@@ -182,6 +201,24 @@ def load_torsdagsbar_config(
     leaderboard_size = max(1, min(leaderboard_size, 25))
     show_records = _as_bool(get("summary_show_records", "TB_SUMMARY_SHOW_RECORDS"), True)
     require_company = _as_bool(get("require_company", "TB_REQUIRE_COMPANY"), True)
+    late_enabled = _as_bool(get("late_enabled", "TB_LATE_ENABLED"), True)
+    late_channel_id = _as_int(get("late_channel_id", "TB_LATE_CHANNEL_ID"))
+    late_grace = geti("late_grace_minutes", "TB_LATE_GRACE_MINUTES", 90)
+    vote_sync_seconds = geti("vote_sync_seconds", "TB_VOTE_SYNC_SECONDS", 180)
+    vote_sync_seconds = max(30, min(vote_sync_seconds, 3600))
+    speedrun_min = geti("speedrun_min_minutes", "TB_SPEEDRUN_MIN_MINUTES", 10)
+
+    def getf(key: str, env_key: str, default: float) -> float:
+        raw = get(key, env_key)
+        if raw is None:
+            return default
+        try:
+            return float(str(raw).strip().replace(",", "."))
+        except ValueError:
+            return default
+
+    marathon_hours = getf("marathon_hours", "TB_MARATHON_HOURS", 5.0)
+    big_words_hours = getf("big_words_hours", "TB_BIG_WORDS_HOURS", 2.0)
     catch_up = geti("summary_catch_up_hours", "TB_SUMMARY_CATCH_UP_HOURS", 6)
     tick_seconds = geti("tick_seconds", "TB_TICK_SECONDS", 30)
     tick_seconds = max(10, min(tick_seconds, 300))
@@ -227,6 +264,13 @@ def load_torsdagsbar_config(
         summary_show_records=show_records,
         summary_catch_up_hours=catch_up,
         require_company=require_company,
+        vote_sync_seconds=vote_sync_seconds,
+        late_enabled=late_enabled,
+        late_channel_id=late_channel_id,
+        late_grace_minutes=late_grace,
+        marathon_hours=marathon_hours,
+        speedrun_min_minutes=speedrun_min,
+        big_words_hours=big_words_hours,
         tick_seconds=tick_seconds,
         db_path=db_path,
         guild_id=guild_id,

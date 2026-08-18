@@ -19,7 +19,7 @@ Svarmulighederne "Efter 21:00" og "Efter 22:00" har jeres egne server-emojis (`:
 
 Botten er skrevet i Python med [discord.py](https://discordpy.readthedocs.io/) og kan pakkes til en enkelt `TorsdagBot.exe`, der kan køre på en almindelig Windows-computer.
 
-> 🆕 **Nyt: Torsdagsbar-statistik.** Botten kan nu også registrere, hvor længe folk sidder i voicechat under torsdagsbaren (torsdag 19:00 → fredag 03:00), sende en automatisk opsummering hver fredag kl. 12:00, og vise statistik, streaks, rekorder og leaderboard med `/torsdagsbar`-kommandoerne. Funktionen er **valgfri** og påvirker ikke afstemningen. Se **[Torsdagsbar-statistik](#torsdagsbar--voice-registrering-og-statistik)**.
+> 🆕 **Torsdagsbar-statistik.** Botten registrerer også, hvor længe folk sidder i voicechat under torsdagsbaren (torsdag 19:00 → fredag 03:00), sender en opsummering hver fredag kl. 12:00 med **aftenens titler** (👑 Aftenens konge, 🏃 Marathonmand, ⚡ Speedrun, 🤥 Store ord …), driller dem der **kommer for sent**, og har **årsopdelt statistik**, **citat-bog** og **profilkort**. Funktionen er **valgfri** og påvirker ikke afstemningen. Se **[Torsdagsbar-statistik](#torsdagsbar--voice-registrering-og-statistik)**.
 
 ---
 
@@ -42,7 +42,8 @@ Botten er skrevet i Python med [discord.py](https://discordpy.readthedocs.io/) o
 15. [Alle indstillinger](#alle-indstillinger)
 16. [Torsdagsbeskederne](#torsdagsbeskederne)
 17. [Server-emojis](#server-emojis)
-18. [Fejlfinding](#fejlfinding)
+18. [Torsdagsbar – voice-registrering og statistik](#torsdagsbar--voice-registrering-og-statistik)
+19. [Fejlfinding](#fejlfinding)
 
 ---
 
@@ -58,6 +59,7 @@ Botten er skrevet i Python med [discord.py](https://discordpy.readthedocs.io/) o
 - ✅ Tydelig logning i konsollen og i `torsdagbot.log`.
 - ✅ **Automatisk genforbindelse** hvis internettet eller Discord falder ud.
 - ✅ Tokenet står **aldrig** i kildekoden – kun i `.env`.
+- ✅ **Torsdagsbar-statistik** (valgfri): voice-registrering, årsopdelt statistik, streaks, rekorder, aftentitler i fredagsopsummeringen, "du er sent på den"-opsang, citat-bog og profilkort.
 
 ---
 
@@ -386,6 +388,24 @@ Alt sættes i `.env` (eller `config.json`, undtagen tokenet).
 | `EMOJI_CODEWEINER` | tom | Server-emoji til "Jeg kommer ikke". |
 | `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING` eller `ERROR`. |
 
+**Torsdagsbar** (i `config.json` under `"torsdagsbar"`, eller i `.env` med `TB_`-præfiks):
+
+| Nøgle | Standard | Betydning |
+|---|---|---|
+| `server_id`, `voice_channel_ids`, `summary_channel_id` | – | **Påkrævet** for at slå torsdagsbaren til. |
+| `min_minutes` | `5` | Mindste deltagelse for at tælle med. |
+| `require_company` | `true` | Optjen kun tid, mens der er andre til stede. |
+| `late_enabled` | `true` | Send "du er sent på den"-beskeder. |
+| `late_channel_id` | tom | Kanal til forsinkelser (tom = opsummeringskanalen). |
+| `late_grace_minutes` | `90` | Hvor sent en forsinkelsesbesked stadig må sendes. |
+| `marathon_hours` | `5` | Grænse for 🏃 Marathonmand. |
+| `speedrun_min_minutes` | `10` | Mindstevarighed for et gyldigt ⚡ Speedrun-besøg. |
+| `big_words_hours` | `2` | Hvor sent man skal være for 🤥 Store ord. |
+| `vote_sync_seconds` | `180` | Hvor ofte stemmer hentes fra Discords poll. |
+| `admin_role_name` / `admin_role_id` | tom | Rolle med adgang til admin-kommandoerne. |
+| `leaderboard_size` | `10` | Antal pr. side på leaderboardet. |
+| `summary_show_records` | `true` | Vis rekorder/streaks i fredagsopsummeringen. |
+
 ### Torsdagsbeskederne
 
 Botten skifter besked hver gang den sender den ugentlige afstemning, og starter forfra på listen efter den sidste. Med 16 beskeder går der altså **16 uger, før den samme tekst kommer igen**.
@@ -525,27 +545,40 @@ Botten skal ud over afstemnings-rettighederne kunne **se og læse** de valgte vo
 
 ### Kommandoer
 
-Alle svar vises i pæne embeds. `bruger` og `periode` kan udelades.
+Alle svar vises i pæne embeds. `bruger`, `periode` og `år` kan udelades.
 
 **For alle:**
 
 | Kommando | Hvad den gør |
 |---|---|
-| `/torsdagsbar stats [bruger] [periode]` | Din (eller en andens) statistik: samlet tid, antal torsdagsbarer, gennemsnit, længste enkeltdeltagelse, streak, placering + top 10. |
+| `/torsdagsbar profil [bruger] [periode] [år]` | **Ét samlet kort:** tid, torsdagsbarer, streak, typisk ankomsttid, holdt-hvad-du-lovede, titler, badges og antal citater. |
+| `/torsdagsbar stats [bruger] [periode] [år]` | Statistik: samlet tid, antal torsdagsbarer, gennemsnit, længste enkeltdeltagelse, streak, placering + top 10. |
 | `/torsdagsbar streak [bruger]` | Nuværende og længste streak + top 10 aktive streaks. |
-| `/torsdagsbar rekorder [periode]` | Flest deltagere, længste individuelle deltagelse, længste aften, længste streaks, flest torsdagsbarer/timer. |
-| `/torsdagsbar leaderboard [sortering] [periode]` | Rangliste med blader-knapper. Sortér efter tid, antal, gennemsnit, streak, længste streak eller længste enkeltdeltagelse. |
+| `/torsdagsbar rekorder [periode] [år]` | Flest deltagere, længste individuelle deltagelse, længste aften, længste streaks, flest torsdagsbarer/timer. |
+| `/torsdagsbar leaderboard [sortering] [periode] [år]` | Rangliste med blader-knapper. Sortér efter tid, antal, gennemsnit, streak, længste streak eller længste enkeltdeltagelse. |
 | `/torsdagsbar live` | Hvem der sidder i baren lige nu, hvor længe, samlet tid, og hvor længe der er tilbage. |
+| `/quote add bruger:@X tekst:"..."` | Gem et citat på en bruger. |
+| `/quote random` | Vis et tilfældigt citat fra hele citat-bogen. |
+| `/quote delete id:` | Slet et citat (dit eget, eller som admin). |
+| `/quotes [bruger]` | Alle citater gemt på en bruger, nyeste først. |
 
-**Perioder:** `sidste_uge`, `denne_måned`, `sidste_3_måneder`, `sidste_6_måneder`, `hele_perioden`.
+**Perioder:** `i_år` (**standard**), `sidste_år`, `sidste_uge`, `denne_måned`, `sidste_3_måneder`, `sidste_6_måneder`, `hele_perioden`. Parameteren `år:2025` slår et bestemt kalenderår op og overtrumfer `periode`.
 
 Eksempler:
 
 ```
-/torsdagsbar stats periode:denne_måned
+/torsdagsbar profil
 /torsdagsbar stats bruger:@Christian periode:sidste_3_måneder
-/torsdagsbar leaderboard sortering:streak periode:hele_perioden
+/torsdagsbar leaderboard sortering:streak år:2025
+/quote add bruger:@Christian tekst:"Slog alle de andre ihjel med kniv"
+/quotes bruger:@Christian
 ```
+
+### 📅 Årsbaseret statistik
+
+Statistikken er opdelt pr. kalenderår, og **standardvisningen er indeværende år**. Ved nytår starter leaderboard og statistik altså naturligt forfra på 0 — men **intet slettes**: gamle år hentes frem igen med `periode:sidste_år` eller `år:2024`, og `periode:hele_perioden` viser alt fra begyndelsen.
+
+**Streaks løber videre hen over nytår**, da en streak handler om torsdage i træk — ikke om kalenderåret.
 
 **Kun for administratorer** (kræver **Administrer server** eller den valgte rolle):
 
@@ -556,6 +589,65 @@ Eksempler:
 | `/torsdagsbar korriger bruger dato handling minutter` | Tilføj tid, sæt samlet tid, eller nulstil rettelser for en bruger (hvis botten var offline eller registrerede forkert). |
 | `/torsdagsbar aflys dato:ÅÅÅÅ-MM-DD [fortryd]` | Markér en torsdag som aflyst/ikke-statistikgivende – bryder ikke streaks. `fortryd:True` ophæver aflysningen. |
 | `/torsdagsbar genberegn` | Genberegner al statistik, streaks og rekorder ud fra de gemte sessioner. |
+
+### 🍻 Fredagsopsummeringen og aftenens titler
+
+Hver fredag kl. 12:00 sender botten en opsummering af torsdagens bar: hvem der deltog og hvor længe, samlet tid og antal deltagere — plus **aftenens titler**. En kategori vises **kun, hvis nogen opfylder den**; ellers udelades den helt.
+
+| Titel | Hvem får den |
+|---|---|
+| 👑 **Aftenens konge** | Længst online i alt den aften. Ved præcis lige tid deles titlen. |
+| 🏃 **Marathonmand** | Alle med **mere end 5 timer** samme aften. |
+| 🐦 **Early Bird** | Først online. |
+| 🦉 **Lukkede baren** | Sidst online — seneste registrerede sluttidspunkt. |
+| 🎯 **Holdt hvad du lovede** | Kom online inden for det tidsrum, de stemte på. |
+| 🎭 **Surprise!** | Stemte "Jeg kommer ikke", men dukkede alligevel op. |
+| ⚡ **Speedrun** | Aftenens korteste gyldige besøg — mindst **10 minutter**, så korte forbindelsesfejl ikke tæller. |
+| 🤥 **Store ord** | Stemte på et bestemt tidsrum, men kom mindst **2 timer** efter dets slutning. |
+| 🐌 **Slow starter** | Aftenens største forsinkelse i forhold til det lovede tidsrum. |
+
+"Efter 21:00", "Efter 22:00" og "Jeg kommer ikke" har ikke et præcist sluttidspunkt og tæller derfor **ikke** med i 🤥 og 🐌.
+
+Grænserne kan justeres med `marathon_hours`, `speedrun_min_minutes` og `big_words_hours`.
+
+### ⏰ "Du er sent på den"
+
+Botten holder øje med, om folk kommer inden for det tidsrum, de stemte på. Er man ikke dukket op, når ens tidsrum slutter, får man en (kærlig) opsang med tag:
+
+> Hva' jeg synes @Christian er sent på den!
+
+Der er **10 forskellige tekster**, så det ikke bliver det samme hver gang, og der sendes **højst én besked pr. person pr. aften**.
+
+**Undtagelser:** stemte man **"Efter 21:00"**, **"Efter 22:00"** eller **"Jeg kommer ikke"**, får man aldrig en forsinkelsesbesked — de to første er åbne løfter, og den sidste lovede jo ikke at komme (de fanges i stedet af 🎭 Surprise!).
+
+Beskeden sendes i opsummeringskanalen, medmindre `late_channel_id` peger et andet sted hen. Kommer botten først op længe efter deadline, sendes der intet (`late_grace_minutes`, standard 90) — så en sen genstart ikke spammer med timegamle forsinkelser. Slås fra med `late_enabled: false`.
+
+### 💬 Citat-bogen
+
+Gem de bedste udtalelser fra serveren:
+
+```
+/quote add bruger:@Christian tekst:"Slog alle de andre ihjel med kniv"
+/quote random
+/quotes bruger:@Christian
+/quote delete id:42
+```
+
+For hvert citat gemmes **hvem det tilhører**, **selve citatet**, **hvem der tilføjede det** og **datoen**. Alle må tilføje citater; et citat kan kun slettes af den, der tilføjede det — eller af en admin.
+
+### 🪪 Profilkortet
+
+`/torsdagsbar profil [bruger]` samler alt ét sted: ⏱️ samlet tid · 🍻 antal torsdagsbarer · 🔥 nuværende og længste streak · 🕒 typisk ankomsttid · 📊 placering · 🎯 hvor ofte man holder hvad man lover (fx "14/18 torsdage, 78 %") · 🏅 optjente titler · 🎖️ badges · 💬 antal citater.
+
+**Badges** tildeles automatisk ud fra data — der er ikke noget at vedligeholde:
+
+🍻 Stamgæst (10/25/50/100 torsdagsbarer) · 🔥 Streak-mester (streak ≥ 5) · 👑 Kongelig · 🏃 Marathonløber · ⚡ Speedrunner · 🦉 Natteravn · 🐦 Morgenfugl · 🎯 Pålidelig (≥ 80 % holdte løfter) · 🎭 Uforudsigelig.
+
+### Hvor stemmerne kommer fra
+
+De stemmeafhængige funktioner (🎯, 🤥, 🐌, 🎭 og "du er sent på den") kræver, at botten ved, **hvad hver person stemte**. Bruger I Discords indbyggede poll, ligger stemmerne hos Discord, så botten henter dem automatisk hvert par minutter og gemmer dem i databasen. Bruger I knapper, gemmes de med det samme. **I skal ikke gøre noget** — det virker i begge tilstande.
+
+> ⚠️ **Bemærk:** stemmerne gemmes først fra den torsdag, hvor denne opdatering kører. Tidligere torsdage har ingen gemt stemmedata, så 🎯 / 🤥 / 🐌 / 🎭 og "Holdt hvad du lovede"-procenten tæller **fra nu af**. 👑 / 🏃 / 🐦 / 🦉 / ⚡ virker derimod **bagud i hele historikken**, da de kun bruger voice-data.
 
 ### Sådan virker registreringen og databasen
 
@@ -605,6 +697,10 @@ python tests\test_torsdagsbar.py
 | Fredagsopsummeringen kom ikke | Var botten tændt fredag kl. 12:00 (inden for 6 timer)? Tjek at `summary_channel_id` er en tekstkanal, botten må skrive i. Ellers: `/torsdagsbar opsummering dato:... gensend:True`. |
 | En bruger fik forkert tid (bot var offline) | Ret med `/torsdagsbar korriger`. Var hele torsdagen aflyst: `/torsdagsbar aflys`. |
 | Vil nulstille torsdagsbar-statistikken | Luk botten og slet `torsdagsbar.db` (ved siden af `.exe`-filen). Den oprettes tom igen ved næste start. |
+| 🎯/🤥/🐌/🎭 vises aldrig | De kræver gemte stemmer. De tæller først fra den torsdag, opdateringen kørte — og botten skal have været tændt, da afstemningen blev sendt. |
+| Ingen forsinkelsesbeskeder | Er `late_enabled` slået fra? Har folk stemt "Efter 21:00/22:00" eller "kommer ikke" (de får aldrig besked)? Startede botten mere end 90 min efter deadline? |
+| Leaderboardet ser tomt ud i januar | Standardperioden er **i år**, som lige er startet forfra. Brug `periode:sidste_år` eller `periode:hele_perioden`. |
+| `/quote` eller `/profil` mangler | Kommandoerne registreres kun, når torsdagsbaren er slået til. Sæt `GUILD_ID` og genstart, og tryk Ctrl+R i Discord. |
 
 Loggen i `torsdagbot.log` (ved siden af `.exe`-filen) indeholder alt: login, oprettede afstemninger, afgivne stemmer, manglende rettigheder og forbindelsesproblemer. Start altid fejlfindingen der.
 

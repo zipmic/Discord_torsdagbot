@@ -27,7 +27,7 @@ from typing import Iterable, Optional
 
 log = logging.getLogger("torsdagbot.torsdagsbar.db")
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 # ---------------------------------------------------------------------------
@@ -69,6 +69,24 @@ class Correction:
     admin_id: Optional[int]
 
 
+@dataclass
+class Vote:
+    bar_date: str
+    user_id: int
+    option_key: str
+    voted_at: Optional[datetime]
+    source: str
+
+
+@dataclass
+class Quote:
+    id: int
+    user_id: int
+    text: str
+    added_by: Optional[int]
+    created_at: Optional[datetime]
+
+
 def _parse_dt(value: Optional[str]) -> Optional[datetime]:
     if not value:
         return None
@@ -88,6 +106,16 @@ def _fmt_dt(value: Optional[datetime]) -> Optional[str]:
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _row_to_quote(row) -> "Quote":
+    return Quote(
+        id=row["id"],
+        user_id=row["user_id"],
+        text=row["text"],
+        added_by=row["added_by"],
+        created_at=_parse_dt(row["created_at"]),
+    )
 
 
 class Database:
@@ -166,10 +194,52 @@ class Database:
                     ON corrections(bar_date);
                 CREATE INDEX IF NOT EXISTS idx_corrections_user_date
                     ON corrections(user_id, bar_date);
+
+                -- Skema v2: stemmer, poll-beskeder, citater og forsinkelsesbeskeder.
+
+                -- Én aktiv stemme pr. bruger pr. torsdagsbar (som Discords poll).
+                CREATE TABLE IF NOT EXISTS poll_votes (
+                    bar_date   TEXT NOT NULL,
+                    user_id    INTEGER NOT NULL,
+                    option_key TEXT NOT NULL,
+                    voted_at   TEXT NOT NULL,
+                    source     TEXT NOT NULL DEFAULT 'native',
+                    PRIMARY KEY (bar_date, user_id)
+                );
+
+                -- Hvor aftenens afstemning blev sendt, så stemmerne kan hentes.
+                CREATE TABLE IF NOT EXISTS poll_messages (
+                    bar_date   TEXT PRIMARY KEY,
+                    message_id INTEGER NOT NULL,
+                    channel_id INTEGER NOT NULL,
+                    mode       TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS quotes (
+                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id    INTEGER NOT NULL,
+                    text       TEXT NOT NULL,
+                    added_by   INTEGER,
+                    created_at TEXT NOT NULL
+                );
+
+                -- Højst én "du er sent på den"-besked pr. bruger pr. aften.
+                CREATE TABLE IF NOT EXISTS late_notices (
+                    bar_date TEXT NOT NULL,
+                    user_id  INTEGER NOT NULL,
+                    sent_at  TEXT NOT NULL,
+                    PRIMARY KEY (bar_date, user_id)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_votes_date ON poll_votes(bar_date);
+                CREATE INDEX IF NOT EXISTS idx_votes_user ON poll_votes(user_id);
+                CREATE INDEX IF NOT EXISTS idx_quotes_user ON quotes(user_id);
                 """
             )
             self._conn.execute(
-                "INSERT OR IGNORE INTO meta(key, value) VALUES('schema_version', ?)",
+                "INSERT INTO meta(key, value) VALUES('schema_version', ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                 (str(SCHEMA_VERSION),),
             )
 
@@ -558,3 +628,204 @@ class Database:
                 (user_id, bar_date),
             ).fetchone()
         return int(row["s"]) if row else 0
+
+    # =======================================================================
+    # Skema v2: stemmer, poll-beskeder, citater, forsinkelsesbeskeder
+    # =======================================================================
+
+    # -- afstemningens stemmer ---------------------------------------------
+    def record_poll_message(
+        self, bar_date: date, message_id: int, channel_id: int, mode: str
+    ) -> None:
+        """Husk hvor aftenens afstemning blev sendt, så stemmerne kan hentes."""
+        with self._lock, self._conn:
+            self._conn.execute(
+                "INSERT INTO poll_messages(bar_date, message_id, channel_id, mode, "
+                "created_at) VALUES(?, ?, ?, ?, ?) "
+                "ON CONFLICT(bar_date) DO UPDATE SET "
+                "message_id = excluded.message_id, channel_id = excluded.channel_id, "
+                "mode = excluded.mode",
+                (bar_date.isoformat(), message_id, channel_id, mode, _fmt_dt(_utcnow())),
+            )
+            self._ensure_night_locked(bar_date.isoformat())
+
+    def get_poll_message(self, bar_date: str) -> Optional[dict]:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM poll_messages WHERE bar_date = ?", (bar_date,)
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "bar_date": row["bar_date"],
+            "message_id": row["message_id"],
+            "channel_id": row["channel_id"],
+            "mode": row["mode"],
+        }
+
+    def upsert_vote(
+        self,
+        bar_date: date,
+        user_id: int,
+        option_key: str,
+        source: str = "native",
+        voted_at: Optional[datetime] = None,
+    ) -> None:
+        """Gem en brugers stemme. Én aktiv stemme pr. bruger pr. aften – en ny
+        stemme overskriver den gamle (som i Discords egen poll)."""
+        with self._lock, self._conn:
+            self._conn.execute(
+                "INSERT INTO poll_votes(bar_date, user_id, option_key, voted_at, source) "
+                "VALUES(?, ?, ?, ?, ?) "
+                "ON CONFLICT(bar_date, user_id) DO UPDATE SET "
+                "option_key = excluded.option_key, voted_at = excluded.voted_at, "
+                "source = excluded.source",
+                (
+                    bar_date.isoformat(),
+                    user_id,
+                    option_key,
+                    _fmt_dt(voted_at or _utcnow()),
+                    source,
+                ),
+            )
+
+    def replace_votes(
+        self, bar_date: date, votes: dict[int, str], source: str = "native"
+    ) -> int:
+        """Erstat alle stemmer for en aften i én transaktion.
+
+        Bruges af synkroniseringen fra Discords indbyggede poll, hvor vi altid
+        henter det fulde billede. Returnerer antallet af gemte stemmer.
+        """
+        with self._lock, self._conn:
+            self._conn.execute(
+                "DELETE FROM poll_votes WHERE bar_date = ? AND source = ?",
+                (bar_date.isoformat(), source),
+            )
+            now = _fmt_dt(_utcnow())
+            self._conn.executemany(
+                "INSERT INTO poll_votes(bar_date, user_id, option_key, voted_at, source) "
+                "VALUES(?, ?, ?, ?, ?) "
+                "ON CONFLICT(bar_date, user_id) DO UPDATE SET "
+                "option_key = excluded.option_key, voted_at = excluded.voted_at, "
+                "source = excluded.source",
+                [
+                    (bar_date.isoformat(), uid, key, now, source)
+                    for uid, key in votes.items()
+                ],
+            )
+            self._ensure_night_locked(bar_date.isoformat())
+            return len(votes)
+
+    def votes_for_night(self, bar_date: str) -> dict[int, str]:
+        """{user_id: option_key} for en enkelt aften."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT user_id, option_key FROM poll_votes WHERE bar_date = ?",
+                (bar_date,),
+            ).fetchall()
+        return {r["user_id"]: r["option_key"] for r in rows}
+
+    def load_votes(
+        self,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        user_id: Optional[int] = None,
+    ) -> dict[str, dict[int, str]]:
+        """{bar_date: {user_id: option_key}} for et dato-interval."""
+        query = ["SELECT bar_date, user_id, option_key FROM poll_votes WHERE 1=1"]
+        params: list[object] = []
+        if start_date:
+            query.append("AND bar_date >= ?")
+            params.append(start_date)
+        if end_date:
+            query.append("AND bar_date <= ?")
+            params.append(end_date)
+        if user_id is not None:
+            query.append("AND user_id = ?")
+            params.append(user_id)
+        with self._lock:
+            rows = self._conn.execute(" ".join(query), params).fetchall()
+        result: dict[str, dict[int, str]] = {}
+        for r in rows:
+            result.setdefault(r["bar_date"], {})[r["user_id"]] = r["option_key"]
+        return result
+
+    # -- forsinkelsesbeskeder ----------------------------------------------
+    def late_notice_sent(self, bar_date: str, user_id: int) -> bool:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT 1 FROM late_notices WHERE bar_date = ? AND user_id = ?",
+                (bar_date, user_id),
+            ).fetchone()
+        return row is not None
+
+    def mark_late_notice(self, bar_date: date, user_id: int) -> bool:
+        """Markér at brugeren har fået sin forsinkelsesbesked.
+
+        Returnerer True hvis denne kaldelse var den første (og beskeden altså
+        skal sendes) – gør det umuligt at sende to gange, også ved race.
+        """
+        with self._lock, self._conn:
+            cur = self._conn.execute(
+                "INSERT OR IGNORE INTO late_notices(bar_date, user_id, sent_at) "
+                "VALUES(?, ?, ?)",
+                (bar_date.isoformat(), user_id, _fmt_dt(_utcnow())),
+            )
+            return cur.rowcount > 0
+
+    def late_notified_users(self, bar_date: str) -> set[int]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT user_id FROM late_notices WHERE bar_date = ?", (bar_date,)
+            ).fetchall()
+        return {r["user_id"] for r in rows}
+
+    # -- citat-bogen --------------------------------------------------------
+    def add_quote(
+        self, user_id: int, text: str, added_by: Optional[int]
+    ) -> int:
+        with self._lock, self._conn:
+            cur = self._conn.execute(
+                "INSERT INTO quotes(user_id, text, added_by, created_at) "
+                "VALUES(?, ?, ?, ?)",
+                (user_id, text, added_by, _fmt_dt(_utcnow())),
+            )
+            return int(cur.lastrowid)
+
+    def get_quote(self, quote_id: int) -> Optional[Quote]:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM quotes WHERE id = ?", (quote_id,)
+            ).fetchone()
+        return _row_to_quote(row) if row else None
+
+    def delete_quote(self, quote_id: int) -> bool:
+        with self._lock, self._conn:
+            cur = self._conn.execute("DELETE FROM quotes WHERE id = ?", (quote_id,))
+            return cur.rowcount > 0
+
+    def quotes_for(self, user_id: int) -> list[Quote]:
+        """Brugerens citater, nyeste først."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM quotes WHERE user_id = ? ORDER BY id DESC", (user_id,)
+            ).fetchall()
+        return [_row_to_quote(r) for r in rows]
+
+    def random_quote(self) -> Optional[Quote]:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM quotes ORDER BY RANDOM() LIMIT 1"
+            ).fetchone()
+        return _row_to_quote(row) if row else None
+
+    def quote_count(self, user_id: Optional[int] = None) -> int:
+        with self._lock:
+            if user_id is None:
+                row = self._conn.execute("SELECT COUNT(*) AS n FROM quotes").fetchone()
+            else:
+                row = self._conn.execute(
+                    "SELECT COUNT(*) AS n FROM quotes WHERE user_id = ?", (user_id,)
+                ).fetchone()
+        return int(row["n"]) if row else 0

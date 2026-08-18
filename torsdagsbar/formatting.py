@@ -11,6 +11,7 @@ from typing import Callable, Optional
 import discord
 from zoneinfo import ZoneInfo
 
+from .awards import AwardTally, Badge, NightAwards
 from .stats import Engine, LeaderboardRow, NightSummary, UserStats
 
 # Navneopslag: giver et brugervenligt navn ud fra et bruger-ID.
@@ -88,12 +89,38 @@ def fmt_countdown(delta: timedelta) -> str:
 
 
 PERIODE_NAVNE = {
+    "i_år": "I år",
+    "sidste_år": "Sidste år",
     "sidste_uge": "Sidste uge",
     "denne_måned": "Denne måned",
     "sidste_3_måneder": "Sidste 3 måneder",
     "sidste_6_måneder": "Sidste 6 måneder",
     "hele_perioden": "Hele perioden",
 }
+
+
+# "Du er sent på den" – flere tekster, så det ikke bliver det samme hver gang.
+# {mention} = brugeren, {løfte} = det tidsrum de stemte på.
+LATE_MESSAGES = (
+    "Hva' jeg synes {mention} er sent på den!",
+    "{mention} lovede {løfte}. Klokken er noget andet nu. 👀",
+    "Vi venter stadig på {mention} … der blev sagt {løfte}. ⏰",
+    "{mention} sagde {løfte}. Trafikken må være slem. 🚗",
+    "Breaking news: {mention} er ikke dukket op endnu. Der blev ellers lovet {løfte}.",
+    "{mention}, dit bord i baren står tomt. Du sagde jo {løfte}! 🍻",
+    "Har nogen set {mention}? Sidst set love {løfte}. 🔍",
+    "{mention} praktiserer akademisk kvarter i stor stil. Der blev stemt {løfte}.",
+    "Sørme om ikke {mention} er sent på den igen. {løfte}, sagde du!",
+    "{mention}: forventet {løfte}. Faktisk: fraværende. Vi noterer. 📋",
+)
+
+
+def late_message(mention: str, promise_label: str) -> str:
+    """Vælg en tilfældig drilske-tekst til en forsinket bruger."""
+    import random
+
+    skabelon = random.choice(LATE_MESSAGES)
+    return skabelon.format(mention=mention, løfte=promise_label)
 
 
 # ---------------------------------------------------------------------------
@@ -322,12 +349,84 @@ def records_embed(
     return embed
 
 
+def _names(ids, name_of: NameResolver) -> str:
+    return ", ".join(name_of(uid) for uid in ids)
+
+
+def award_fields(
+    awards: NightAwards, name_of: NameResolver, tz: ZoneInfo
+) -> list[tuple[str, str]]:
+    """Aftenens titler som (overskrift, tekst).
+
+    Kategorier uden gyldige data giver ingen linje og udelades dermed helt.
+    """
+    felter: list[tuple[str, str]] = []
+    if not awards.has_any:
+        return felter
+
+    if awards.kings:
+        felter.append((
+            "👑 Aftenens konge",
+            f"{_names(awards.kings, name_of)} — {fmt_duration(awards.king_seconds)}",
+        ))
+    if awards.marathon:
+        felter.append((
+            "🏃 Marathonmand",
+            "\n".join(
+                f"{name_of(uid)} — {fmt_duration(sec)}" for uid, sec in awards.marathon
+            ),
+        ))
+    if awards.early_birds and awards.early_bird_at:
+        felter.append((
+            "🐦 Early Bird",
+            f"{_names(awards.early_birds, name_of)} ({fmt_clock(awards.early_bird_at, tz)})",
+        ))
+    if awards.closers and awards.closer_at:
+        felter.append((
+            "🦉 Lukkede baren",
+            f"{_names(awards.closers, name_of)} ({fmt_clock(awards.closer_at, tz)})",
+        ))
+    if awards.kept_promise:
+        felter.append((
+            "🎯 Holdt hvad de lovede",
+            _names(awards.kept_promise, name_of),
+        ))
+    if awards.surprises:
+        felter.append((
+            "🎭 Surprise!",
+            f"{_names(awards.surprises, name_of)} — stemte \"kommer ikke\", men mødte op!",
+        ))
+    if awards.speedrun:
+        felter.append((
+            "⚡ Speedrun",
+            f"{_names(awards.speedrun, name_of)} — {fmt_duration(awards.speedrun_seconds)}",
+        ))
+    if awards.big_words:
+        felter.append((
+            "🤥 Store ord",
+            "\n".join(
+                f"{name_of(uid)} — mødte op {fmt_duration(delay)} for sent"
+                for uid, delay in awards.big_words
+            ),
+        ))
+    if awards.slow_starters:
+        felter.append((
+            "🐌 Slow starter",
+            "\n".join(
+                f"{name_of(uid)} — forsinket {fmt_duration(delay)}"
+                for uid, delay in awards.slow_starters
+            ),
+        ))
+    return felter
+
+
 def summary_embed(
     ns: NightSummary,
     name_of: NameResolver,
     tz: ZoneInfo,
     *,
     show_records: bool = True,
+    awards: Optional[NightAwards] = None,
 ) -> discord.Embed:
     """Fredagsopsummeringen."""
     dato = parse_date(ns.bar_date)
@@ -365,9 +464,15 @@ def summary_embed(
         colour=FARVE,
     )
 
+    # Aftenens titler (hver kategori udelades, hvis ingen opfylder den).
+    if awards is not None:
+        for navn, værdi in award_fields(awards, name_of, tz):
+            embed.add_field(name=navn, value=værdi, inline=False)
+
     if show_records:
         ekstra = []
-        if ns.top_user is not None:
+        # 👑 vises som sit eget felt ovenfor, når titlerne er med.
+        if ns.top_user is not None and awards is None:
             top_sec = ns.participants[0][1]
             ekstra.append(f"👑 Længst til stede: **{name_of(ns.top_user)}** ({fmt_duration(top_sec)})")
         if ns.new_participant_record:
@@ -385,4 +490,156 @@ def summary_embed(
         embed.set_footer(
             text=f"Registreret {fmt_span(ns.first_join, ns.last_leave, tz)}"
         )
+    return embed
+
+
+# ---------------------------------------------------------------------------
+# 🪪 Profilkort
+# ---------------------------------------------------------------------------
+def fmt_arrival_offset(minutes: Optional[int], window_start_hour: int, window_start_minute: int) -> str:
+    """Omsæt "minutter efter registreringsstart" til et klokkeslæt, fx 'kl. 20:12'."""
+    if minutes is None:
+        return "—"
+    total = window_start_hour * 60 + window_start_minute + minutes
+    total %= 24 * 60
+    return f"kl. {total // 60:02d}:{total % 60:02d}"
+
+
+def profile_embed(
+    stats: UserStats,
+    engine: Engine,
+    tally: AwardTally,
+    badges: list[Badge],
+    name_of: NameResolver,
+    tz: ZoneInfo,
+    periode_label: str,
+    *,
+    typical_arrival: str = "—",
+    quote_count: int = 0,
+    avatar_url: Optional[str] = None,
+) -> discord.Embed:
+    """Ét samlet kort med alt om en bruger."""
+    navn = name_of(stats.user_id)
+    streak = engine.streak(stats.user_id)
+    embed = discord.Embed(title=f"🪪 {navn}", colour=FARVE)
+    if avatar_url:
+        embed.set_thumbnail(url=avatar_url)
+
+    if stats.nights == 0:
+        embed.description = "Ingen registreret deltagelse i den valgte periode."
+        _footer(embed, periode_label)
+        return embed
+
+    embed.add_field(name="⏱️ Samlet tid", value=fmt_duration(stats.total_seconds), inline=True)
+    embed.add_field(name="🍻 Torsdagsbarer", value=str(stats.nights), inline=True)
+    embed.add_field(
+        name="🔥 Streak",
+        value=f"{streak.current} nu · {streak.longest} bedst",
+        inline=True,
+    )
+    embed.add_field(name="🕒 Typisk ankomst", value=typical_arrival, inline=True)
+    if stats.rank:
+        embed.add_field(
+            name="📊 Placering",
+            value=f"#{stats.rank} af {stats.participants_in_period}",
+            inline=True,
+        )
+    if stats.longest_single_seconds:
+        embed.add_field(
+            name="⌛ Længste enkeltdeltagelse",
+            value=fmt_duration(stats.longest_single_seconds),
+            inline=True,
+        )
+
+    # 🎯 Holdt hvad du lovede
+    if tally.promised:
+        embed.add_field(
+            name="🎯 Holdt hvad du lovede",
+            value=f"{tally.kept}/{tally.promised} torsdage ({tally.kept_pct:.0f} %)",
+            inline=False,
+        )
+
+    # Titler – kun dem der faktisk er vundet.
+    titler = [
+        ("👑", "Aftenens konge", tally.king),
+        ("🏃", "Marathonmand", tally.marathon),
+        ("🐦", "Early Bird", tally.early_bird),
+        ("🦉", "Lukkede baren", tally.closer),
+        ("⚡", "Speedrun", tally.speedrun),
+        ("🎭", "Surprise!", tally.surprise),
+        ("🤥", "Store ord", tally.big_words),
+        ("🐌", "Slow starter", tally.slow_starter),
+    ]
+    vundne = [f"{emoji} {navn_}: **{antal}**" for emoji, navn_, antal in titler if antal]
+    if vundne:
+        embed.add_field(name="🏅 Titler", value=" · ".join(vundne), inline=False)
+
+    if badges:
+        embed.add_field(
+            name="🎖️ Badges",
+            value="\n".join(f"{b.emoji} **{b.name}** — {b.description}" for b in badges),
+            inline=False,
+        )
+
+    if quote_count:
+        embed.add_field(name="💬 Citater", value=str(quote_count), inline=True)
+
+    _footer(embed, periode_label)
+    return embed
+
+
+# ---------------------------------------------------------------------------
+# 💬 Citat-bogen
+# ---------------------------------------------------------------------------
+def _quote_line(quote, name_of: NameResolver, tz: ZoneInfo, *, med_id: bool = True) -> str:
+    dato = ""
+    if quote.created_at:
+        lokal = to_local(quote.created_at, tz)
+        dato = f" · {lokal.strftime('%d-%m-%Y')}"
+    tilføjet = f" · tilføjet af {name_of(quote.added_by)}" if quote.added_by else ""
+    prefix = f"`#{quote.id}` " if med_id else ""
+    return f"{prefix}*”{quote.text}”*{tilføjet}{dato}"
+
+
+def quote_embed(quote, name_of: NameResolver, tz: ZoneInfo, *, titel: Optional[str] = None) -> discord.Embed:
+    """Ét enkelt citat."""
+    navn = name_of(quote.user_id)
+    embed = discord.Embed(
+        title=titel or f"💬 Citat — {navn}",
+        description=f"*”{quote.text}”*\n\n— **{navn}**",
+        colour=FARVE,
+    )
+    detaljer = []
+    if quote.added_by:
+        detaljer.append(f"Tilføjet af {name_of(quote.added_by)}")
+    if quote.created_at:
+        detaljer.append(to_local(quote.created_at, tz).strftime("%d-%m-%Y"))
+    embed.set_footer(text=f"Citat #{quote.id}" + (" · " + " · ".join(detaljer) if detaljer else ""))
+    return embed
+
+
+def quotes_embed(
+    quotes: list,
+    user_id: int,
+    name_of: NameResolver,
+    tz: ZoneInfo,
+    page: int,
+    pages: int,
+    per_page: int,
+) -> discord.Embed:
+    """Alle citater for én bruger, med sidetal."""
+    navn = name_of(user_id)
+    embed = discord.Embed(title=f"💬 Citat-bogen — {navn}", colour=FARVE)
+    if not quotes:
+        embed.description = f"Der er ingen citater gemt på {navn} endnu."
+        embed.set_footer(text="Torsdagsbar · Tilføj et med /quote add")
+        return embed
+
+    start = page * per_page
+    embed.description = "\n\n".join(
+        _quote_line(q, name_of, tz) for q in quotes[start : start + per_page]
+    )
+    embed.set_footer(
+        text=f"Torsdagsbar · {len(quotes)} citat(er) · Side {page + 1}/{pages}"
+    )
     return embed

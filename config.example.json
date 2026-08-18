@@ -17,14 +17,23 @@
   "EMOJI_CODE": "<:code:887336573933334648>",
   "EMOJI_CLUE": "<:clue:1044354323561320539>",
   "EMOJI_CODEWEINER": "<:codeweiner:000000000000000000>",
-
-  "_torsdagsbar_kommentar": "Voice-registrering + statistik. Udfyld server_id, voice_channel_ids og summary_channel_id for at slaa funktionen til. Er de ikke sat, koerer afstemningen bare videre uden statistik. Alle ID'er kopieres med Developer Mode slaaet til.",
+  "_torsdagsbar_kommentar": "Voice-registrering + statistik. Udfyld server_id, voice_channel_ids og summary_channel_id for at slaa funktionen til. Er de ikke sat, koerer afstemningen bare videre uden statistik. late_channel_id = null betyder, at forsinkelsesbeskeder sendes i opsummeringskanalen. Alle ID'er kopieres med Developer Mode slaaet til.",
   "torsdagsbar": {
     "server_id": 123456789012345678,
-    "voice_channel_ids": [111111111111111111, 222222222222222222],
+    "voice_channel_ids": [
+      111111111111111111,
+      222222222222222222
+    ],
     "summary_channel_id": 333333333333333333,
     "min_minutes": 5,
     "require_company": true,
+    "late_enabled": true,
+    "late_channel_id": null,
+    "late_grace_minutes": 90,
+    "marathon_hours": 5,
+    "speedrun_min_minutes": 10,
+    "big_words_hours": 2,
+    "vote_sync_seconds": 180,
     "admin_role_name": "Torsdagsbar-admin",
     "admin_role_id": null,
     "leaderboard_size": 10,

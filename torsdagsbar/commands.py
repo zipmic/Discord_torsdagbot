@@ -21,6 +21,8 @@ log = logging.getLogger("torsdagbot.torsdagsbar.commands")
 
 # Valgmuligheder til perioder og sorteringer.
 PERIODE_CHOICES = [
+    app_commands.Choice(name="I år", value="i_år"),
+    app_commands.Choice(name="Sidste år", value="sidste_år"),
     app_commands.Choice(name="Sidste uge", value="sidste_uge"),
     app_commands.Choice(name="Denne måned", value="denne_måned"),
     app_commands.Choice(name="Sidste 3 måneder", value="sidste_3_måneder"),
@@ -44,6 +46,20 @@ KORRIGER_CHOICES = [
 ]
 
 
+# Standardperioden: indeværende kalenderår. Statistikken starter dermed
+# naturligt forfra ved nytår, uden at gamle år går tabt.
+STANDARD_PERIODE = "i_år"
+
+# Ældste år man kan slå op (Discord var der ikke før).
+MIN_ÅR = 2015
+
+
+def _periode_og_år(module, periode, år) -> tuple:
+    """(start, slut, label) ud fra kommandoens periode- og år-parametre."""
+    value = periode.value if periode else STANDARD_PERIODE
+    return module.period_bounds(value, år)
+
+
 def _parse_date_arg(value: str) -> Optional[date]:
     try:
         return fmt.parse_date(value)
@@ -51,19 +67,19 @@ def _parse_date_arg(value: str) -> Optional[date]:
         return None
 
 
-class LeaderboardView(discord.ui.View):
-    """Blader-knapper til leaderboardet (næste/forrige side)."""
+class PaginatedEmbedView(discord.ui.View):
+    """Genbrugelige blader-knapper.
 
-    def __init__(self, module, rows, sort_key, sort_label, periode_label, per_page):
-        super().__init__(timeout=180)
-        self.module = module
-        self.rows = rows
-        self.sort_key = sort_key
-        self.sort_label = sort_label
-        self.periode_label = periode_label
-        self.per_page = per_page
+    ``render(page, pages)`` bygger embed'en for en given side, så både
+    leaderboardet og citat-listen kan bruge den samme knap-logik.
+    """
+
+    def __init__(self, render, total_items: int, per_page: int, timeout: float = 180):
+        super().__init__(timeout=timeout)
+        self._render = render
+        self.per_page = max(1, per_page)
         self.page = 0
-        self.pages = max(1, (len(rows) + per_page - 1) // per_page)
+        self.pages = max(1, (total_items + self.per_page - 1) // self.per_page)
         self._sync_buttons()
 
     def _sync_buttons(self) -> None:
@@ -71,10 +87,7 @@ class LeaderboardView(discord.ui.View):
         self.next_button.disabled = self.page >= self.pages - 1
 
     def embed(self) -> discord.Embed:
-        return fmt.leaderboard_embed(
-            self.rows, self.module.name_of, self.sort_key, self.sort_label,
-            self.periode_label, self.page, self.pages, self.per_page,
-        )
+        return self._render(self.page, self.pages)
 
     @discord.ui.button(label="◀ Forrige", style=discord.ButtonStyle.secondary)
     async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -91,6 +104,20 @@ class LeaderboardView(discord.ui.View):
     async def on_timeout(self) -> None:
         for child in self.children:
             child.disabled = True
+
+
+async def send_paginated(
+    interaction: discord.Interaction, view: PaginatedEmbedView, ephemeral: bool = False
+) -> None:
+    """Send en sideopdelt embed.
+
+    Bemærk: discord.py accepterer ikke ``view=None`` – parameteren skal helt
+    udelades, når der kun er én side.
+    """
+    if view.pages > 1:
+        await interaction.followup.send(embed=view.embed(), view=view, ephemeral=ephemeral)
+    else:
+        await interaction.followup.send(embed=view.embed(), ephemeral=ephemeral)
 
 
 def build_group(module) -> app_commands.Group:
@@ -115,16 +142,20 @@ def build_group(module) -> app_commands.Group:
 
     # ------------------------------------------------------------------ stats
     @group.command(name="stats", description="Vis deltagelsesstatistik for dig selv eller en anden.")
-    @app_commands.describe(bruger="Hvis bruger? (udelad = dig selv)", periode="Hvilken periode?")
+    @app_commands.describe(
+        bruger="Hvis bruger? (udelad = dig selv)",
+        periode="Hvilken periode? (standard: i år)",
+        år="Et bestemt kalenderår, fx 2025 (overtrumfer periode)",
+    )
     @app_commands.choices(periode=PERIODE_CHOICES)
     async def stats_cmd(
         interaction: discord.Interaction,
         bruger: Optional[discord.Member] = None,
         periode: Optional[app_commands.Choice[str]] = None,
+        år: Optional[app_commands.Range[int, MIN_ÅR, 2100]] = None,
     ) -> None:
         await interaction.response.defer(thinking=True)
-        periode_value = periode.value if periode else "hele_perioden"
-        start, end, label = module.period_bounds(periode_value)
+        start, end, label = _periode_og_år(module, periode, år)
         target = bruger or interaction.user
         engine = await module.build_engine()
         stats = engine.user_stats(target.id, start, end)
@@ -148,15 +179,18 @@ def build_group(module) -> app_commands.Group:
 
     # --------------------------------------------------------------- rekorder
     @group.command(name="rekorder", description="Vis rekorder for hele historikken eller en periode.")
-    @app_commands.describe(periode="Afgræns til en periode (udelad = hele historikken)")
+    @app_commands.describe(
+        periode="Afgræns til en periode (standard: i år)",
+        år="Et bestemt kalenderår, fx 2025 (overtrumfer periode)",
+    )
     @app_commands.choices(periode=PERIODE_CHOICES)
     async def rekorder_cmd(
         interaction: discord.Interaction,
         periode: Optional[app_commands.Choice[str]] = None,
+        år: Optional[app_commands.Range[int, MIN_ÅR, 2100]] = None,
     ) -> None:
         await interaction.response.defer(thinking=True)
-        periode_value = periode.value if periode else "hele_perioden"
-        start, end, label = module.period_bounds(periode_value)
+        start, end, label = _periode_og_år(module, periode, år)
         engine = await module.build_engine()
         rec = engine.records(start, end)
         embed = fmt.records_embed(rec, engine, module.name_of, module.tz, label)
@@ -172,29 +206,53 @@ def build_group(module) -> app_commands.Group:
 
     # ------------------------------------------------------------ leaderboard
     @group.command(name="leaderboard", description="Vis ranglisten over deltagelse.")
-    @app_commands.describe(sortering="Hvad skal der sorteres efter?", periode="Hvilken periode?")
+    @app_commands.describe(
+        sortering="Hvad skal der sorteres efter?",
+        periode="Hvilken periode? (standard: i år)",
+        år="Et bestemt kalenderår, fx 2025 (overtrumfer periode)",
+    )
     @app_commands.choices(sortering=SORT_CHOICES, periode=PERIODE_CHOICES)
     async def leaderboard_cmd(
         interaction: discord.Interaction,
         sortering: Optional[app_commands.Choice[str]] = None,
         periode: Optional[app_commands.Choice[str]] = None,
+        år: Optional[app_commands.Range[int, MIN_ÅR, 2100]] = None,
     ) -> None:
         await interaction.response.defer(thinking=True)
         sort_key = sortering.value if sortering else "tid"
         sort_label = sortering.name if sortering else SORT_KEYS["tid"]
-        periode_value = periode.value if periode else "hele_perioden"
-        start, end, label = module.period_bounds(periode_value)
+        start, end, label = _periode_og_år(module, periode, år)
         engine = await module.build_engine()
         rows = engine.leaderboard(sort_key, start, end, limit=None)
-        view = LeaderboardView(
-            module, rows, sort_key, sort_label, label, module.config.leaderboard_size
+        per_page = module.config.leaderboard_size
+        view = PaginatedEmbedView(
+            lambda page, pages: fmt.leaderboard_embed(
+                rows, module.name_of, sort_key, sort_label, label, page, pages, per_page
+            ),
+            len(rows),
+            per_page,
         )
-        # Vedhæft kun blader-knapperne, når der er mere end én side. Bemærk:
-        # discord.py accepterer ikke view=None her – parameteren skal helt udelades.
-        if view.pages > 1:
-            await interaction.followup.send(embed=view.embed(), view=view)
-        else:
-            await interaction.followup.send(embed=view.embed())
+        await send_paginated(interaction, view)
+
+    # ----------------------------------------------------------------- profil
+    @group.command(name="profil", description="Vis ét samlet profilkort for dig selv eller en anden.")
+    @app_commands.describe(
+        bruger="Hvis profil? (udelad = dig selv)",
+        periode="Hvilken periode? (standard: i år)",
+        år="Et bestemt kalenderår, fx 2025 (overtrumfer periode)",
+    )
+    @app_commands.choices(periode=PERIODE_CHOICES)
+    async def profil_cmd(
+        interaction: discord.Interaction,
+        bruger: Optional[discord.Member] = None,
+        periode: Optional[app_commands.Choice[str]] = None,
+        år: Optional[app_commands.Range[int, MIN_ÅR, 2100]] = None,
+    ) -> None:
+        await interaction.response.defer(thinking=True)
+        start, end, label = _periode_og_år(module, periode, år)
+        target = bruger or interaction.user
+        embed = await module.build_profile(target, start, end, label)
+        await interaction.followup.send(embed=embed)
 
     # ----------------------------------------------------------- status (admin)
     @group.command(name="status", description="(Admin) Vis registreringens og databasens status.")
@@ -418,3 +476,99 @@ def _live_embed(module, status: dict) -> discord.Embed:
         f"· {fmt.fmt_countdown(status['time_left'])} tilbage"
     )
     return embed
+
+
+# ===========================================================================
+# 💬 Citat-bogen: /quote add|random|delete og /quotes
+# ===========================================================================
+def build_quote_commands(module) -> list:
+    """Byg /quote-gruppen og den selvstændige /quotes-kommando."""
+
+    quote_group = app_commands.Group(
+        name="quote",
+        description="Citat-bogen: gem og find mindeværdige citater.",
+        guild_only=True,
+    )
+
+    @quote_group.command(name="add", description="Gem et citat på en bruger.")
+    @app_commands.describe(bruger="Hvem sagde det?", tekst="Hvad blev der sagt?")
+    async def quote_add(
+        interaction: discord.Interaction,
+        bruger: discord.Member,
+        tekst: app_commands.Range[str, 2, 900],
+    ) -> None:
+        if bruger.bot:
+            await interaction.response.send_message(
+                "Man kan ikke gemme citater på en bot. 🤖", ephemeral=True
+            )
+            return
+        await interaction.response.defer(thinking=True)
+        await asyncio.to_thread(module.db.upsert_user, bruger.id, bruger.display_name)
+        quote_id = await asyncio.to_thread(
+            module.db.add_quote, bruger.id, tekst.strip(), interaction.user.id
+        )
+        quote = await asyncio.to_thread(module.db.get_quote, quote_id)
+        log.info(
+            "Torsdagsbar: %s gemte citat #%s på %s.",
+            interaction.user, quote_id, bruger.display_name,
+        )
+        await interaction.followup.send(
+            embed=fmt.quote_embed(
+                quote, module.name_of, module.tz, titel=f"💬 Citat gemt — {bruger.display_name}"
+            )
+        )
+
+    @quote_group.command(name="random", description="Vis et tilfældigt citat fra citat-bogen.")
+    async def quote_random(interaction: discord.Interaction) -> None:
+        await interaction.response.defer(thinking=True)
+        quote = await asyncio.to_thread(module.db.random_quote)
+        if quote is None:
+            await interaction.followup.send(
+                "Citat-bogen er tom endnu. Tilføj det første med `/quote add`. 💬"
+            )
+            return
+        await interaction.followup.send(
+            embed=fmt.quote_embed(quote, module.name_of, module.tz, titel="💬 Tilfældigt citat")
+        )
+
+    @quote_group.command(name="delete", description="Slet et citat (kun dit eget eller som admin).")
+    @app_commands.describe(id="Citatets nummer – står i bunden af citatet")
+    async def quote_delete(
+        interaction: discord.Interaction,
+        id: app_commands.Range[int, 1, 10_000_000],
+    ) -> None:
+        await interaction.response.defer(thinking=True, ephemeral=True)
+        quote = await asyncio.to_thread(module.db.get_quote, id)
+        if quote is None:
+            await interaction.followup.send(f"Der findes ikke noget citat #{id}.", ephemeral=True)
+            return
+        if quote.added_by != interaction.user.id and not module.is_admin(interaction):
+            await interaction.followup.send(
+                "Du kan kun slette citater, du selv har tilføjet.", ephemeral=True
+            )
+            return
+        await asyncio.to_thread(module.db.delete_quote, id)
+        log.info("Torsdagsbar: %s slettede citat #%s.", interaction.user, id)
+        await interaction.followup.send(f"🗑️ Citat #{id} er slettet.", ephemeral=True)
+
+    @app_commands.command(name="quotes", description="Vis alle citater gemt på en bruger.")
+    @app_commands.describe(bruger="Hvis citater? (udelad = dine egne)")
+    @app_commands.guild_only()
+    async def quotes_cmd(
+        interaction: discord.Interaction,
+        bruger: Optional[discord.Member] = None,
+    ) -> None:
+        await interaction.response.defer(thinking=True)
+        target = bruger or interaction.user
+        quotes = await asyncio.to_thread(module.db.quotes_for, target.id)
+        per_page = 5
+        view = PaginatedEmbedView(
+            lambda page, pages: fmt.quotes_embed(
+                quotes, target.id, module.name_of, module.tz, page, pages, per_page
+            ),
+            len(quotes),
+            per_page,
+        )
+        await send_paginated(interaction, view)
+
+    return [quote_group, quotes_cmd]

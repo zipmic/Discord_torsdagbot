@@ -279,6 +279,38 @@ class Engine:
             if sec >= self.min_seconds
         }
 
+    def qualifiers(self, bar_date: str) -> dict[int, int]:
+        """Offentligt navn for de kvalificerede deltagere en given aften."""
+        return self._qualifiers(bar_date)
+
+    def night_arrivals(self, bar_date: str) -> dict[int, datetime]:
+        """Tidligste ankomst pr. bruger den aften (rå tidsstempel, ikke gated)."""
+        result: dict[int, datetime] = {}
+        for s in self.sessions:
+            if s.bar_date != bar_date:
+                continue
+            current = result.get(s.user_id)
+            if current is None or s.joined_at < current:
+                result[s.user_id] = s.joined_at
+        return result
+
+    def night_departures(self, bar_date: str) -> dict[int, datetime]:
+        """Seneste afgang pr. bruger den aften (rå tidsstempel)."""
+        result: dict[int, datetime] = {}
+        for s in self.sessions:
+            if s.bar_date != bar_date or s.left_at is None:
+                continue
+            current = result.get(s.user_id)
+            if current is None or s.left_at > current:
+                result[s.user_id] = s.left_at
+        return result
+
+    def dates_in_period(
+        self, start: Optional[str] = None, end: Optional[str] = None
+    ) -> list[str]:
+        """De tællende torsdagsbarer inden for en periode."""
+        return [d for d in self.counting_dates if self._in_period(d, start, end)]
+
     def _in_period(self, bar_date: str, start: Optional[str], end: Optional[str]) -> bool:
         if start and bar_date < start:
             return False

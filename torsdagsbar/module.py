@@ -19,6 +19,15 @@ from .config import TorsdagsbarConfig
 from .database import Database
 from .period import clamp
 from .stats import Engine
+from .awards import (
+    AwardRules,
+    AwardTally,
+    compute_night_awards,
+    earned_badges,
+    tally_for_user,
+    typical_arrival_minutes,
+)
+from .votes import VoteOption, find_option, promise_window, sync_native_votes
 from . import formatting as fmt
 
 log = logging.getLogger("torsdagbot.torsdagsbar")
@@ -44,12 +53,15 @@ class TorsdagsbarModule:
         client: discord.Client,
         config: TorsdagsbarConfig,
         db: Database,
+        vote_options: Optional[list[VoteOption]] = None,
     ) -> None:
         self.client = client
         self.config = config
         self.db = db
         self.tz = config.schedule.tz
         self.schedule = config.schedule
+        # Afstemningens svarmuligheder (leveres af hovedbotten).
+        self.vote_options: list[VoteOption] = list(vote_options or [])
 
         # Importér her for at undgå cirkulær import (tracker/commands bruger os ikke).
         from .tracker import VoiceTracker
@@ -57,20 +69,23 @@ class TorsdagsbarModule:
         self.tracker = VoiceTracker(client, config, db)
         self._summary_lock = asyncio.Lock()
         self._started = False
+        self._late_lock = asyncio.Lock()
+        # Hvornår stemmerne sidst blev hentet fra Discords indbyggede poll.
+        self._last_vote_sync: Optional[datetime] = None
 
     # -- livscyklus ---------------------------------------------------------
     async def setup(self) -> None:
         """Registrér kommandoer og start baggrundstasken. Kaldes fra setup_hook."""
-        from .commands import build_group
+        from .commands import build_group, build_quote_commands
 
-        group = build_group(self)
-        # Fjern en evt. tidligere gruppe (ved reconnect genopbygges træet).
-        try:
-            self.client.tree.remove_command(group.name)
-        except Exception:
-            pass
-        self.client.tree.add_command(group)
-        log.info("Torsdagsbar: /%s-kommandoer registreret.", group.name)
+        # Fjern evt. tidligere kommandoer (ved reconnect genopbygges træet).
+        for command in [build_group(self), *build_quote_commands(self)]:
+            try:
+                self.client.tree.remove_command(command.name)
+            except Exception:
+                pass
+            self.client.tree.add_command(command)
+        log.info("Torsdagsbar: /torsdagsbar-, /quote- og /quotes-kommandoer registreret.")
 
         self.tick_loop.change_interval(seconds=self.config.tick_seconds)
         if not self.tick_loop.is_running():
@@ -88,6 +103,62 @@ class TorsdagsbarModule:
 
     async def on_voice_state_update(self, member, before, after) -> None:
         await self.tracker.on_voice_state_update(member, before, after)
+
+    # -- afstemningen (broen fra hovedbotten) ------------------------------
+    async def on_poll_sent(
+        self, message_id: int, channel_id: Optional[int], mode: str, now: datetime
+    ) -> None:
+        """Hovedbotten har sendt ugens afstemning – husk hvor den står."""
+        if channel_id is None:
+            return
+        bar_date = self.schedule.most_recent_bar_date(now)
+        await asyncio.to_thread(
+            self.db.record_poll_message, bar_date, message_id, channel_id, mode
+        )
+        # Hent stemmerne snarest muligt ved næste tick.
+        self._last_vote_sync = None
+        log.info(
+            "Torsdagsbar: afstemningen for %s registreret (%s, besked %s).",
+            bar_date.isoformat(), mode, message_id,
+        )
+
+    async def on_button_vote(self, user_id: int, option_key: str, now: datetime) -> None:
+        """En bruger trykkede på en knap i afstemningen."""
+        bar_date = self.schedule.most_recent_bar_date(now)
+        await asyncio.to_thread(
+            self.db.upsert_vote, bar_date, user_id, option_key, "buttons"
+        )
+
+    async def _maybe_sync_votes(self) -> None:
+        """Hent stemmerne fra Discords indbyggede poll med jævne mellemrum.
+
+        Kører fra afstemningen er sendt, til fredagsopsummeringen er skrevet –
+        derefter er stemmerne alligevel låst fast i databasen.
+        """
+        if not self.vote_options:
+            return
+        now = self.tracker.now()
+        bar_date = self.schedule.most_recent_bar_date(now)
+        if now > self.schedule.summary_time_of(bar_date):
+            return
+        if (
+            self._last_vote_sync is not None
+            and (now - self._last_vote_sync).total_seconds() < self.config.vote_sync_seconds
+        ):
+            return
+
+        poll_ref = await asyncio.to_thread(self.db.get_poll_message, bar_date.isoformat())
+        if poll_ref is None:
+            return
+        self._last_vote_sync = now
+        if poll_ref.get("mode") != "native":
+            return  # knap-stemmer kommer ind direkte via on_button_vote
+
+        antal = await sync_native_votes(
+            self.client, self.db, bar_date, self.vote_options, poll_ref
+        )
+        if antal >= 0:
+            log.debug("Torsdagsbar: %d stemmer synkroniseret for %s.", antal, bar_date)
 
     async def close(self) -> None:
         if self.tick_loop.is_running():
@@ -110,13 +181,20 @@ class TorsdagsbarModule:
     async def tick_loop(self) -> None:
         try:
             await self.tracker.tick()
+            await self._maybe_sync_votes()
+            await self._maybe_send_late_notices()
             await self._maybe_send_due_summary()
         except Exception:
             log.exception("Torsdagsbar: uventet fejl i tick-loop.")
 
     @tick_loop.before_loop
     async def _before_tick(self) -> None:
-        await self.client.wait_until_ready()
+        try:
+            await self.client.wait_until_ready()
+        except RuntimeError:
+            # Klienten er ikke logget ind (kan ske i test eller hvis der lukkes
+            # ned midt i opstarten). Loopet må ikke dø af det.
+            pass
 
     # -- databaseadgang -> statistik-motor ---------------------------------
     async def build_engine(
@@ -175,10 +253,30 @@ class TorsdagsbarModule:
         return stored or str(user_id)
 
     # -- perioder -----------------------------------------------------------
-    def period_bounds(self, periode: str) -> tuple[Optional[str], Optional[str], str]:
-        """(start_date, end_date, label) ud fra et periode-valg."""
+    def year_bounds(self, year: int) -> tuple[str, str, str]:
+        """(start, slut, label) for et helt kalenderår."""
+        return f"{year}-01-01", f"{year}-12-31", str(year)
+
+    def period_bounds(
+        self, periode: str, year: Optional[int] = None
+    ) -> tuple[Optional[str], Optional[str], str]:
+        """(start_date, end_date, label) ud fra et periode-valg.
+
+        Et konkret ``year`` overtrumfer periodevalget, så man altid kan slå et
+        tidligere år op. Standardperioden er indeværende kalenderår, så
+        statistikken naturligt starter forfra ved nytår – uden at gamle år går
+        tabt (de kan hentes frem igen med "Sidste år" eller år:ÅÅÅÅ).
+        """
         today = self.tracker.now().date()
+        if year is not None:
+            return self.year_bounds(year)
         label = fmt.PERIODE_NAVNE.get(periode, "Hele perioden")
+        if periode == "i_år":
+            start, end, _ = self.year_bounds(today.year)
+            return start, end, f"I år ({today.year})"
+        if periode == "sidste_år":
+            start, end, _ = self.year_bounds(today.year - 1)
+            return start, end, f"Sidste år ({today.year - 1})"
         if periode == "sidste_uge":
             return (today - timedelta(days=7)).isoformat(), today.isoformat(), label
         if periode == "denne_måned":
@@ -197,6 +295,36 @@ class TorsdagsbarModule:
         if st > now:
             return st
         return self.schedule.summary_time_of(mr + timedelta(days=7))
+
+    # -- profilkort ---------------------------------------------------------
+    async def build_profile(
+        self, target, start: Optional[str], end: Optional[str], periode_label: str
+    ):
+        """Byg det samlede profilkort for en bruger."""
+        engine = await self.build_engine()
+        stats = engine.user_stats(target.id, start, end)
+        votes_by_night = await asyncio.to_thread(self.db.load_votes, start, end, None)
+        tally = tally_for_user(
+            engine, target.id, votes_by_night, self.vote_options,
+            self.schedule, self.award_rules, start, end,
+        )
+        badges = earned_badges(
+            nights=stats.nights,
+            longest_streak=engine.streak(target.id).longest,
+            tally=tally,
+        )
+        minutter = typical_arrival_minutes(engine, target.id, self.schedule, start, end)
+        ankomst = fmt.fmt_arrival_offset(
+            minutter, self.schedule.start_hour, self.schedule.start_minute
+        )
+        antal_citater = await asyncio.to_thread(self.db.quote_count, target.id)
+        avatar = getattr(getattr(target, "display_avatar", None), "url", None)
+        return fmt.profile_embed(
+            stats, engine, tally, badges, self.name_of, self.tz, periode_label,
+            typical_arrival=ankomst,
+            quote_count=antal_citater,
+            avatar_url=avatar,
+        )
 
     # -- adgangskontrol -----------------------------------------------------
     def is_admin(self, interaction: discord.Interaction) -> bool:
@@ -218,6 +346,108 @@ class TorsdagsbarModule:
         if self.config.admin_role_name and self.config.admin_role_name.lower() in role_names:
             return True
         return False
+
+    # -- aftentitler --------------------------------------------------------
+    @property
+    def award_rules(self) -> AwardRules:
+        """Grænserne for aftenens titler, som de er sat i konfigurationen."""
+        return AwardRules(
+            marathon_seconds=int(self.config.marathon_hours * 3600),
+            speedrun_min_seconds=self.config.speedrun_min_minutes * 60,
+            big_words_seconds=int(self.config.big_words_hours * 3600),
+        )
+
+    async def night_awards(self, engine: Engine, bar_date: date):
+        """Beregn aftenens titler for en given torsdagsbar."""
+        votes = await asyncio.to_thread(self.db.votes_for_night, bar_date.isoformat())
+        return compute_night_awards(
+            engine, bar_date.isoformat(), votes, self.vote_options,
+            self.schedule, self.award_rules,
+        )
+
+    # -- "du er sent på den" ------------------------------------------------
+    async def _late_channel(self):
+        """Kanalen til forsinkelsesbeskeder (falder tilbage til opsummeringen)."""
+        channel_id = self.config.late_channel_id or self.config.summary_channel_id
+        if channel_id is None:
+            return None
+        channel = self.client.get_channel(channel_id)
+        if channel is None:
+            try:
+                channel = await self.client.fetch_channel(channel_id)
+            except Exception as exc:
+                log.error("Torsdagsbar: kunne ikke finde kanalen til forsinkelser: %s", exc)
+                return None
+        return channel
+
+    async def _maybe_send_late_notices(self) -> None:
+        """Drill dem, der lovede at komme, men ikke er dukket op endnu.
+
+        Kun for løfter med et konkret sluttidspunkt: "efter 21:00", "efter 22:00"
+        og "jeg kommer ikke" kan man ikke komme for sent til. Højst én besked pr.
+        bruger pr. aften, og kun inden for karensvinduet efter deadline, så en
+        bot der starter sent ikke spammer med timegamle forsinkelser.
+        """
+        if not self.config.late_enabled or not self.vote_options:
+            return
+        now = self.tracker.now()
+        bar_date = self.schedule.current_bar_date(now)
+        if bar_date is None:
+            return  # kun mens torsdagsbaren kører
+
+        async with self._late_lock:
+            night = await asyncio.to_thread(self.db.get_night, bar_date.isoformat())
+            if night is not None and night.cancelled:
+                return
+
+            votes = await asyncio.to_thread(self.db.votes_for_night, bar_date.isoformat())
+            if not votes:
+                return
+
+            sessions = await asyncio.to_thread(
+                self.db.load_sessions, bar_date.isoformat(), bar_date.isoformat(), None, True
+            )
+            ankommet = {s.user_id for s in sessions}
+            allerede = await asyncio.to_thread(
+                self.db.late_notified_users, bar_date.isoformat()
+            )
+            window_start, _ = self.schedule.window_of(bar_date)
+            karens = timedelta(minutes=self.config.late_grace_minutes)
+
+            for user_id, option_key in votes.items():
+                if user_id in ankommet or user_id in allerede:
+                    continue
+                option = find_option(self.vote_options, option_key)
+                if option is None or not option.has_deadline:
+                    continue
+                _, deadline = promise_window(option, bar_date, self.tz, window_start)
+                if deadline is None or not (deadline <= now <= deadline + karens):
+                    continue
+                # mark_late_notice er atomisk: True kun første gang.
+                if not await asyncio.to_thread(self.db.mark_late_notice, bar_date, user_id):
+                    continue
+                await self._send_late_message(user_id, option)
+
+    async def _send_late_message(self, user_id: int, option: VoteOption) -> None:
+        channel = await self._late_channel()
+        if channel is None:
+            return
+        tekst = fmt.late_message(f"<@{user_id}>", option.label)
+        try:
+            await channel.send(
+                tekst,
+                allowed_mentions=discord.AllowedMentions(
+                    users=True, everyone=False, roles=False, replied_user=False
+                ),
+            )
+            log.info(
+                "Torsdagsbar: forsinkelsesbesked sendt til %s (%s).",
+                self.name_of(user_id), option.label,
+            )
+        except discord.Forbidden:
+            log.error("Torsdagsbar: mangler rettigheder til at sende forsinkelsesbesked.")
+        except discord.HTTPException as exc:
+            log.error("Torsdagsbar: kunne ikke sende forsinkelsesbesked: %s", exc)
 
     # -- fredagsopsummering -------------------------------------------------
     async def _maybe_send_due_summary(self) -> None:
@@ -255,8 +485,11 @@ class TorsdagsbarModule:
 
             engine = await self.build_engine()
             ns = engine.night_summary(bar_date.isoformat())
+            awards = await self.night_awards(engine, bar_date)
             embed = fmt.summary_embed(
-                ns, self.name_of, self.tz, show_records=self.config.summary_show_records
+                ns, self.name_of, self.tz,
+                show_records=self.config.summary_show_records,
+                awards=awards,
             )
             try:
                 await channel.send(embed=embed)

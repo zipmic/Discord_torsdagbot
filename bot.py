@@ -72,6 +72,7 @@ try:
         load_torsdagsbar_config,
     )
     from torsdagsbar.database import Database as TorsdagsbarDatabase
+    from torsdagsbar.votes import VoteOption
 
     TORSDAGSBAR_AVAILABLE = True
     TORSDAGSBAR_IMPORT_ERROR: Optional[str] = None
@@ -178,6 +179,14 @@ class PollOption:
     emoji_env: str = ""  # Navn på server-emojien; kan overstyres via EMOJI_<NAVN> i .env.
     emoji_default: str = ""  # Server-emojiens fulde form <:navn:id> som standard.
 
+    # Løftet: hvornår siger man, at man kommer? Bruges af torsdagsbaren til
+    # "du er sent på den", 🎯 Holdt hvad du lovede, 🤥 Store ord og 🐌 Slow starter.
+    # promise_end = None betyder et åbent løfte ("efter 21:00"), hvor man ikke
+    # kan komme for sent. absent = "jeg kommer ikke".
+    promise_start: Optional[dt_time] = None
+    promise_end: Optional[dt_time] = None
+    absent: bool = False
+
     @property
     def label(self) -> str:
         """Teksten på knappen / svarmuligheden i poll'en.
@@ -220,15 +229,50 @@ THURSDAY_MESSAGES: tuple[str, ...] = (
 )
 
 POLL_OPTIONS: tuple[PollOption, ...] = (
-    PollOption("early", "Early Bird kl. 19:00–20:00", "🕖"),
-    PollOption("t2000", "Mellem kl. 20:00–20:30", "🕗"),
-    PollOption("t2030", "Mellem kl. 20:30–21:00", "🕣"),
+    PollOption(
+        "early", "Early Bird kl. 19:00–20:00", "🕖",
+        promise_start=dt_time(19, 0), promise_end=dt_time(20, 0),
+    ),
+    PollOption(
+        "t2000", "Mellem kl. 20:00–20:30", "🕗",
+        promise_start=dt_time(20, 0), promise_end=dt_time(20, 30),
+    ),
+    PollOption(
+        "t2030", "Mellem kl. 20:30–21:00", "🕣",
+        promise_start=dt_time(20, 30), promise_end=dt_time(21, 0),
+    ),
     # Server-emojierne :code: og :clue: sidder som standard på 21:00- og
     # 22:00-linjerne. De kan overstyres med EMOJI_CODE / EMOJI_CLUE i .env.
-    PollOption("e2100", "Efter 21:00 lol", "🕘", "code", "<:code:887336573933334648>"),
-    PollOption("e2200", "Efter 22:00 lol", "🕙", "clue", "<:clue:1044354323561320539>"),
-    PollOption("nope", "Jeg kommer ikke", "❌", "codeweiner"),
+    # De to "efter"-valg har et åbent løfte: man kan ikke komme for sent.
+    PollOption(
+        "e2100", "Efter 21:00 lol", "🕘", "code", "<:code:887336573933334648>",
+        promise_start=dt_time(21, 0),
+    ),
+    PollOption(
+        "e2200", "Efter 22:00 lol", "🕙", "clue", "<:clue:1044354323561320539>",
+        promise_start=dt_time(22, 0),
+    ),
+    PollOption("nope", "Jeg kommer ikke", "❌", "codeweiner", absent=True),
 )
+
+
+def vote_options() -> list:
+    """Oversæt POLL_OPTIONS til torsdagsbarens neutrale VoteOption-format.
+
+    Holder torsdagsbar-pakken fri af enhver import fra bot.py.
+    """
+    if not TORSDAGSBAR_AVAILABLE:
+        return []
+    return [
+        VoteOption(
+            key=o.key,
+            label=o.label,
+            promise_start=o.promise_start,
+            promise_end=o.promise_end,
+            absent=o.absent,
+        )
+        for o in POLL_OPTIONS
+    ]
 
 
 def build_content(message: str, is_test: bool = False) -> str:
@@ -751,7 +795,11 @@ class TorsdagBot(discord.Client):
         # på tværs af genforbindelser, mens modulet genskabes pr. klient.
         self.torsdagsbar: Any = None
         if tb_config is not None and getattr(tb_config, "enabled", False) and tb_db is not None:
-            self.torsdagsbar = TorsdagsbarModule(self, tb_config, tb_db)
+            # Svarmulighederne følger med, så torsdagsbaren kan sammenholde
+            # løfter med den faktiske ankomst uden at importere fra bot.py.
+            self.torsdagsbar = TorsdagsbarModule(
+                self, tb_config, tb_db, vote_options=vote_options()
+            )
 
         self._register_commands()
 
@@ -1094,6 +1142,7 @@ class TorsdagBot(discord.Client):
                         channel,
                         ", test" if is_test else "",
                     )
+                    await self._note_poll_sent(message, channel, "native", is_test)
                     return message
                 except (TypeError, AttributeError) as exc:
                     # Biblioteket understøtter alligevel ikke poll-parameteren.
@@ -1130,7 +1179,36 @@ class TorsdagBot(discord.Client):
                 channel,
                 ", test" if is_test else "",
             )
+            await self._note_poll_sent(message, channel, "buttons", is_test)
             return message
+
+    # -- broen til torsdagsbaren -------------------------------------------
+    async def _note_poll_sent(
+        self, message: discord.Message, channel: Any, mode: str, is_test: bool
+    ) -> None:
+        """Fortæl torsdagsbaren hvor aftenens afstemning står.
+
+        Testafstemninger springes over, så en test ikke overskriver den rigtige
+        afstemning for dagen. Fejler aldrig udadtil – afstemningen er vigtigere
+        end statistikken.
+        """
+        if is_test or self.torsdagsbar is None:
+            return
+        try:
+            await self.torsdagsbar.on_poll_sent(
+                message.id, getattr(channel, "id", None), mode, self.now()
+            )
+        except Exception:
+            log.debug("Kunne ikke registrere afstemningen i torsdagsbaren", exc_info=True)
+
+    async def _note_button_vote(self, user_id: int, option_key: str) -> None:
+        """Videregiv en knap-stemme til torsdagsbaren."""
+        if self.torsdagsbar is None:
+            return
+        try:
+            await self.torsdagsbar.on_button_vote(user_id, option_key, self.now())
+        except Exception:
+            log.debug("Kunne ikke gemme stemmen i torsdagsbaren", exc_info=True)
 
     # -- stemmehåndtering (knap-tilstand) ----------------------------------
     async def handle_vote(self, interaction: discord.Interaction, option: PollOption) -> None:
@@ -1180,6 +1258,7 @@ class TorsdagBot(discord.Client):
                 option.label,
                 message.id,
             )
+            await self._note_button_vote(interaction.user.id, option.key)
         except Exception:
             log.exception("Fejl under registrering af stemme")
             if not interaction.response.is_done():
