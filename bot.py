@@ -23,6 +23,7 @@ aktuelle mappe.
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import logging
 import os
@@ -1371,6 +1372,30 @@ class TorsdagBot(discord.Client):
         await self.wait_until_ready()
         log.info("Planlæggeren er startet (tjekker uret hvert %d. sekund).", self.config.check_interval_seconds)
 
+    async def _hent_billede(self, url: str) -> Optional[bytes]:
+        """Hent et billede over HTTP (til /erdettorsdag).
+
+        Returnerer bytes, eller None hvis det ikke lykkedes (netværksfejl,
+        forkert URL, eller svaret er ikke et billede). Fejler aldrig udadtil.
+        """
+        try:
+            timeout = aiohttp.ClientTimeout(total=8)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(url) as resp:
+                    if resp.status != 200:
+                        log.warning("/erdettorsdag: %s svarede HTTP %s", url, resp.status)
+                        return None
+                    ctype = resp.headers.get("Content-Type", "")
+                    if not ctype.startswith("image/"):
+                        log.warning("/erdettorsdag: %s er ikke et billede (%s)", url, ctype)
+                        return None
+                    # Sæt en fornuftig størrelsesgrænse (Discord tillader 8-10 MB).
+                    data = await resp.content.read(8 * 1024 * 1024)
+                    return data or None
+        except Exception as exc:
+            log.warning("/erdettorsdag: kunne ikke hente %s: %s", url, exc)
+            return None
+
     # -- slash-kommandoer ---------------------------------------------------
     def _register_commands(self) -> None:
         @self.tree.command(
@@ -1437,15 +1462,30 @@ class TorsdagBot(discord.Client):
             # er sat til – så vi tjekker den rigtige ugedag i dansk tid,
             # uanset hvor i verden botten kører.
             er_torsdag = self.now().weekday() == TORSDAG
-            # Billedet lægges i en embed, så selve URL'en ikke står som tekst
-            # i beskeden – der står kun ":D" / ":(" over billedet.
-            embed = discord.Embed(colour=discord.Colour.blurple())
-            embed.set_image(
-                url=BILLEDE_TORSDAG if er_torsdag else BILLEDE_IKKE_TORSDAG
-            )
-            await interaction.response.send_message(
-                ":D" if er_torsdag else ":(", embed=embed
-            )
+            tekst = ":D" if er_torsdag else ":("
+            url = BILLEDE_TORSDAG if er_torsdag else BILLEDE_IKKE_TORSDAG
+
+            # Vi giver os selv tid til at hente billedet (defer inden 3 sek.).
+            await interaction.response.defer()
+
+            # Botten henter selv billedet og vedhæfter det som en fil. Så viser
+            # Discord det ALTID – også hvis siden blokerer "hotlinking" via
+            # Discords egen billed-proxy (den typiske grund til at et embed-
+            # billede ikke dukker op).
+            data = await self._hent_billede(url)
+            if data is not None:
+                fil = discord.File(io.BytesIO(data), filename="erdettorsdag.jpg")
+                await interaction.followup.send(tekst, file=fil)
+            else:
+                # Kunne ikke hente billedet – vis det som embed-URL i stedet,
+                # så der da er et forsøg på et billede, og send teksten uanset.
+                embed = discord.Embed(colour=discord.Colour.blurple())
+                embed.set_image(url=url)
+                await interaction.followup.send(tekst, embed=embed)
+                log.warning(
+                    "/erdettorsdag: kunne ikke hente billedet fra %s – "
+                    "sendte embed-URL i stedet.", url,
+                )
 
         @self.tree.error
         async def on_app_command_error(
