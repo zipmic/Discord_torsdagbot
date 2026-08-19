@@ -297,7 +297,15 @@ CUSTOM_ID_PREFIX = "torsdagbot:vote:"
 # Torsdag som ugedagsnummer (datetime.weekday(): 0 = mandag).
 TORSDAG = 3
 
-# Billeder til /erdettorsdag (hentes af Discord fra erdettorsdag.dk).
+# Billeder til /erdettorsdag.
+# Botten bruger FØRST et lokalt billede fra undermappen "imgs" ved siden af
+# .exe-filen (torsdag.* / ikke_torsdag.*). Findes det ikke, hentes billedet fra
+# nettet i stedet. Lokale filer er hurtigst og mest driftssikre.
+BILLEDE_MAPPE = "imgs"
+BILLEDE_TORSDAG_FIL = "torsdag"
+BILLEDE_IKKE_TORSDAG_FIL = "ikke_torsdag"
+BILLEDE_EXTS = (".jpg", ".jpeg", ".png", ".gif", ".webp")
+
 BILLEDE_TORSDAG = "https://erdettorsdag.dk/imgs/1.jpg"
 BILLEDE_IKKE_TORSDAG = "https://erdettorsdag.dk/imgs/0.jpg"
 
@@ -1372,6 +1380,19 @@ class TorsdagBot(discord.Client):
         await self.wait_until_ready()
         log.info("Planlæggeren er startet (tjekker uret hvert %d. sekund).", self.config.check_interval_seconds)
 
+    def _lokalt_billede(self, basenavn: str) -> Optional[Path]:
+        """Find et lokalt billede i undermappen "imgs" ved siden af .exe-filen.
+
+        Leder efter fx imgs/torsdag.jpg, .png, .gif, .webp ... Returnerer stien
+        til den første, der findes, ellers None.
+        """
+        mappe = APP_DIR / BILLEDE_MAPPE
+        for ext in BILLEDE_EXTS:
+            sti = mappe / f"{basenavn}{ext}"
+            if sti.is_file():
+                return sti
+        return None
+
     async def _hent_billede(self, url: str) -> Optional[bytes]:
         """Hent et billede over HTTP (til /erdettorsdag).
 
@@ -1386,12 +1407,19 @@ class TorsdagBot(discord.Client):
                         log.warning("/erdettorsdag: %s svarede HTTP %s", url, resp.status)
                         return None
                     ctype = resp.headers.get("Content-Type", "")
-                    if not ctype.startswith("image/"):
+                    if ctype and not ctype.startswith("image/"):
                         log.warning("/erdettorsdag: %s er ikke et billede (%s)", url, ctype)
                         return None
-                    # Sæt en fornuftig størrelsesgrænse (Discord tillader 8-10 MB).
-                    data = await resp.content.read(8 * 1024 * 1024)
-                    return data or None
+                    # resp.read() læser HELE billedet til ende – i modsætning til
+                    # resp.content.read(n), som kun giver den første chunk og
+                    # dermed et halvt (gråt) billede.
+                    data = await resp.read()
+                    if not data:
+                        return None
+                    if len(data) > 10 * 1024 * 1024:  # Discords grænse for gratis-servere
+                        log.warning("/erdettorsdag: billedet er for stort (%d bytes).", len(data))
+                        return None
+                    return data
         except Exception as exc:
             log.warning("/erdettorsdag: kunne ikke hente %s: %s", url, exc)
             return None
@@ -1464,27 +1492,36 @@ class TorsdagBot(discord.Client):
             er_torsdag = self.now().weekday() == TORSDAG
             tekst = ":D" if er_torsdag else ":("
             url = BILLEDE_TORSDAG if er_torsdag else BILLEDE_IKKE_TORSDAG
+            basenavn = BILLEDE_TORSDAG_FIL if er_torsdag else BILLEDE_IKKE_TORSDAG_FIL
 
-            # Vi giver os selv tid til at hente billedet (defer inden 3 sek.).
+            # Vi giver os selv tid (defer inden 3 sek.), hvis vi skal hente over nettet.
             await interaction.response.defer()
 
-            # Botten henter selv billedet og vedhæfter det som en fil. Så viser
-            # Discord det ALTID – også hvis siden blokerer "hotlinking" via
-            # Discords egen billed-proxy (den typiske grund til at et embed-
-            # billede ikke dukker op).
+            # 1) Findes billedet lokalt i imgs-mappen, bruges det direkte –
+            #    hurtigt, driftssikkert og uden at hente noget fra nettet.
+            lokal = self._lokalt_billede(basenavn)
+            if lokal is not None:
+                await interaction.followup.send(
+                    tekst, file=discord.File(str(lokal))
+                )
+                return
+
+            # 2) Ellers henter botten hele billedet fra nettet og vedhæfter det
+            #    som en fil. Så viser Discord det ALTID – også hvis siden
+            #    blokerer "hotlinking" via Discords egen billed-proxy.
             data = await self._hent_billede(url)
             if data is not None:
                 fil = discord.File(io.BytesIO(data), filename="erdettorsdag.jpg")
                 await interaction.followup.send(tekst, file=fil)
             else:
-                # Kunne ikke hente billedet – vis det som embed-URL i stedet,
-                # så der da er et forsøg på et billede, og send teksten uanset.
+                # 3) Sidste udvej: prøv et embed-billede, og send teksten uanset.
                 embed = discord.Embed(colour=discord.Colour.blurple())
                 embed.set_image(url=url)
                 await interaction.followup.send(tekst, embed=embed)
                 log.warning(
-                    "/erdettorsdag: kunne ikke hente billedet fra %s – "
-                    "sendte embed-URL i stedet.", url,
+                    "/erdettorsdag: hverken lokalt billede (imgs/%s.*) eller "
+                    "hentning fra %s virkede – sendte embed-URL i stedet.",
+                    basenavn, url,
                 )
 
         @self.tree.error

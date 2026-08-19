@@ -92,6 +92,11 @@ echo.
 
 REM --- 5. Laeg .env.example ved siden af .exe-filen -------------------------
 echo [5/5] Kopierer hjaelpefiler til dist ...
+REM Opret imgs-mappe til /erdettorsdag-billeder, med en lille laesemig.
+if not exist "dist\imgs" mkdir "dist\imgs"
+> "dist\imgs\LAESMIG.txt" echo Laeg dine egne billeder her: torsdag.jpg og ikke_torsdag.jpg
+>>"dist\imgs\LAESMIG.txt" echo (jpg, png, gif eller webp virker). Findes de, bruger /erdettorsdag dem
+>>"dist\imgs\LAESMIG.txt" echo i stedet for at hente fra nettet. Slet denne fil hvis du vil.
 if exist ".env.example" copy /y ".env.example" "dist\.env.example" >nul
 if exist "config.example.json" copy /y "config.example.json" "dist\config.example.json" >nul
 if exist "start_bot.bat" copy /y "start_bot.bat" "dist\start_bot.bat" >nul

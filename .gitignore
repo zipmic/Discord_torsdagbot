@@ -26,3 +26,6 @@ __pycache__/
 .venv/
 venv/
 env/
+
+# /erdettorsdag: brugerens egne billeder (valgfrit)
+imgs/
