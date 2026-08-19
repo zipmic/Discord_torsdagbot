@@ -489,7 +489,36 @@ async def test_quotes_and_profile():
         db.close()
 
 
+def test_all_submodules_eagerly_imported():
+    """Alle undermoduler skal indlæses ved 'import torsdagsbar'.
+
+    Et modul, der kun importeres inde i en funktion, bliver ikke fundet af
+    PyInstallers statiske analyse og ryger derfor ikke med i .exe-filen. Det
+    ramte os i praksis: commands.py manglede i buildet, så /torsdagsbar, /quote
+    og /quotes forsvandt fra Discord, mens resten af botten kørte videre.
+    """
+    import importlib, sys
+
+    for navn in list(sys.modules):
+        if navn.startswith("torsdagsbar"):
+            del sys.modules[navn]
+    importlib.import_module("torsdagsbar")
+
+    forventet = {
+        "awards", "commands", "config", "database", "formatting",
+        "module", "period", "stats", "tracker", "votes",
+    }
+    indlæst = {
+        n.split(".", 1)[1] for n in sys.modules
+        if n.startswith("torsdagsbar.") and "." not in n.split(".", 1)[1]
+    }
+    manglende = forventet - indlæst
+    check(f"alle {len(forventet)} undermoduler indlæses ved import (mangler: {manglende or 'ingen'})",
+          not manglende)
+
+
 async def main():
+    test_all_submodules_eagerly_imported()
     test_king_and_marathon()
     test_early_bird_and_closer()
     test_kept_promise()

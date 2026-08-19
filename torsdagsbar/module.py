@@ -15,10 +15,12 @@ from typing import Optional
 import discord
 from discord.ext import tasks
 
+from .commands import build_group, build_quote_commands
 from .config import TorsdagsbarConfig
 from .database import Database
 from .period import clamp
 from .stats import Engine
+from .tracker import VoiceTracker
 from .awards import (
     AwardRules,
     AwardTally,
@@ -63,9 +65,6 @@ class TorsdagsbarModule:
         # Afstemningens svarmuligheder (leveres af hovedbotten).
         self.vote_options: list[VoteOption] = list(vote_options or [])
 
-        # Importér her for at undgå cirkulær import (tracker/commands bruger os ikke).
-        from .tracker import VoiceTracker
-
         self.tracker = VoiceTracker(client, config, db)
         self._summary_lock = asyncio.Lock()
         self._started = False
@@ -76,8 +75,6 @@ class TorsdagsbarModule:
     # -- livscyklus ---------------------------------------------------------
     async def setup(self) -> None:
         """Registrér kommandoer og start baggrundstasken. Kaldes fra setup_hook."""
-        from .commands import build_group, build_quote_commands
-
         # Fjern evt. tidligere kommandoer (ved reconnect genopbygges træet).
         for command in [build_group(self), *build_quote_commands(self)]:
             try:

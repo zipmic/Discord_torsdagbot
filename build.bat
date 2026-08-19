@@ -74,6 +74,17 @@ echo [4/5] Koerer PyInstaller ...
     --collect-all tzdata ^
     --collect-submodules discord ^
     --collect-submodules torsdagsbar ^
+    --hidden-import torsdagsbar ^
+    --hidden-import torsdagsbar.awards ^
+    --hidden-import torsdagsbar.commands ^
+    --hidden-import torsdagsbar.config ^
+    --hidden-import torsdagsbar.database ^
+    --hidden-import torsdagsbar.formatting ^
+    --hidden-import torsdagsbar.module ^
+    --hidden-import torsdagsbar.period ^
+    --hidden-import torsdagsbar.stats ^
+    --hidden-import torsdagsbar.tracker ^
+    --hidden-import torsdagsbar.votes ^
     --hidden-import dotenv ^
     bot.py
 if errorlevel 1 goto :fejl_build
