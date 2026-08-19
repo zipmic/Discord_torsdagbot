@@ -296,6 +296,10 @@ CUSTOM_ID_PREFIX = "torsdagbot:vote:"
 # Torsdag som ugedagsnummer (datetime.weekday(): 0 = mandag).
 TORSDAG = 3
 
+# Billeder til /erdettorsdag (hentes af Discord fra erdettorsdag.dk).
+BILLEDE_TORSDAG = "https://erdettorsdag.dk/imgs/1.jpg"
+BILLEDE_IKKE_TORSDAG = "https://erdettorsdag.dk/imgs/0.jpg"
+
 
 def option_by_key(key: str) -> Optional[PollOption]:
     for option in POLL_OPTIONS:
@@ -1433,7 +1437,15 @@ class TorsdagBot(discord.Client):
             # er sat til – så vi tjekker den rigtige ugedag i dansk tid,
             # uanset hvor i verden botten kører.
             er_torsdag = self.now().weekday() == TORSDAG
-            await interaction.response.send_message(":D" if er_torsdag else ":(")
+            # Billedet lægges i en embed, så selve URL'en ikke står som tekst
+            # i beskeden – der står kun ":D" / ":(" over billedet.
+            embed = discord.Embed(colour=discord.Colour.blurple())
+            embed.set_image(
+                url=BILLEDE_TORSDAG if er_torsdag else BILLEDE_IKKE_TORSDAG
+            )
+            await interaction.response.send_message(
+                ":D" if er_torsdag else ":(", embed=embed
+            )
 
         @self.tree.error
         async def on_app_command_error(
