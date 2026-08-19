@@ -245,10 +245,17 @@ def load_torsdagsbar_config(
     else:
         enabled = has_required
         if not has_required:
-            log.info(
-                "Torsdagsbar-statistik er ikke konfigureret (mangler server_id/"
-                "voice_channel_ids/summary_channel_id) – funktionen er slået fra. "
-                "Afstemningen kører som normalt."
+            log.warning(
+                "TORSDAGSBAR SLÅET FRA: mangler %s i .env/config.json, så "
+                "/torsdagsbar, /quote og /quotes vises IKKE i Discord. "
+                "Afstemningen kører som normalt.",
+                ", ".join(
+                    navn for navn, sat in (
+                        ("TB_SERVER_ID", server_id),
+                        ("TB_VOICE_CHANNEL_IDS", voice_channel_ids),
+                        ("TB_SUMMARY_CHANNEL_ID", summary_channel_id),
+                    ) if not sat
+                ),
             )
 
     return TorsdagsbarConfig(

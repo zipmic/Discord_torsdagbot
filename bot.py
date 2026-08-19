@@ -820,21 +820,35 @@ class TorsdagBot(discord.Client):
             try:
                 await self.torsdagsbar.setup()
             except Exception:
-                log.exception("Torsdagsbar: kunne ikke registrere kommandoer/task.")
+                log.error(
+                    "TORSDAGSBAR-FEJL: kommandoerne kunne IKKE registreres, så "
+                    "/torsdagsbar, /quote og /quotes vil mangle i Discord. "
+                    "Detaljer:", exc_info=True,
+                )
 
         # Synkronisér slash-kommandoer.
         try:
             if self.config.guild_id:
                 guild = discord.Object(id=self.config.guild_id)
                 self.tree.copy_global_to(guild=guild)
-                await self.tree.sync(guild=guild)
-                log.info("Slash-kommandoer synkroniseret til server %s.", self.config.guild_id)
-            else:
+                synkroniseret = await self.tree.sync(guild=guild)
+                # Ryd gamle GLOBALE kopier. Uden det bliver kommandoer, der
+                # tidligere blev synkroniseret globalt, liggende hos Discord og
+                # vises DOBBELT ved siden af server-udgaven.
+                self.tree.clear_commands(guild=None)
                 await self.tree.sync()
                 log.info(
-                    "Slash-kommandoer synkroniseret globalt "
-                    "(kan tage op til en time før /testvote er synlig – "
-                    "sæt GUILD_ID i .env for øjeblikkelig opdatering)."
+                    "Slash-kommandoer synkroniseret til server %s: %s",
+                    self.config.guild_id,
+                    ", ".join("/" + c.name for c in synkroniseret) or "ingen",
+                )
+            else:
+                synkroniseret = await self.tree.sync()
+                log.info(
+                    "Slash-kommandoer synkroniseret globalt: %s "
+                    "(kan tage op til en time før de er synlige – "
+                    "sæt GUILD_ID i .env for øjeblikkelig opdatering).",
+                    ", ".join("/" + c.name for c in synkroniseret) or "ingen",
                 )
         except discord.HTTPException as exc:
             log.error("Kunne ikke synkronisere slash-kommandoer: %s", exc)
@@ -1600,7 +1614,11 @@ def main() -> int:
                 log.exception("Torsdagsbar: kunne ikke åbne databasen – funktionen slås fra.")
                 tb_config, tb_db = None, None
     else:
-        log.warning("Torsdagsbar-modulet kunne ikke indlæses: %s", TORSDAGSBAR_IMPORT_ERROR)
+        log.error(
+            "TORSDAGSBAR-FEJL: modulet kunne ikke indlæses, så /torsdagsbar, /quote "
+            "og /quotes vil mangle. Mangler der filer i torsdagsbar-mappen? Årsag: %s",
+            TORSDAGSBAR_IMPORT_ERROR,
+        )
 
     try:
         asyncio.run(run_forever(config, state, tz, tb_config=tb_config, tb_db=tb_db))
