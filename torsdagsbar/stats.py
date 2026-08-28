@@ -220,9 +220,17 @@ class Engine:
 
         # Nat-totaler {bar_date: {user_id: sekunder}} og længste sammenhængende
         # "med selskab"-stræk {bar_date: {user_id: (sek, start, slut)}}.
+        # Derudover den RÅ tid i baren {bar_date: {user_id: sekunder}}, som er
+        # uafhængig af selskabskravet og bruges til at bryde uafgjorte titler.
         self.night_user: dict[str, dict[int, int]] = {}
         self.night_user_longest: dict[str, dict[int, tuple[int, datetime, datetime]]] = {}
+        self.night_user_present: dict[str, dict[int, int]] = {}
         for bar_date, users in intervals_by_night.items():
+            merged_by_user = {uid: _merge_intervals(ivs) for uid, ivs in users.items()}
+            presence = {
+                uid: int(sum((e - s).total_seconds() for s, e in merged))
+                for uid, merged in merged_by_user.items()
+            }
             if self.require_company:
                 comp = companioned_night(users)
                 totals = {uid: v[0] for uid, v in comp.items()}
@@ -233,16 +241,15 @@ class Engine:
                 }
             else:
                 # Uden selskabskrav: rå summer + hele intervaller som "stræk".
-                totals = {}
+                totals = dict(presence)
                 longest = {}
-                for uid, ivs in users.items():
-                    merged = _merge_intervals(ivs)
-                    totals[uid] = int(sum((e - s).total_seconds() for s, e in merged))
+                for uid, merged in merged_by_user.items():
                     if merged:
                         s, e = max(merged, key=lambda iv: iv[1] - iv[0])
                         longest[uid] = (int((e - s).total_seconds()), s, e)
             self.night_user[bar_date] = totals
             self.night_user_longest[bar_date] = longest
+            self.night_user_present[bar_date] = presence
 
         # Læg manuelle rettelser oveni nat-totalerne.
         for c in corrections:
@@ -282,6 +289,15 @@ class Engine:
     def qualifiers(self, bar_date: str) -> dict[int, int]:
         """Offentligt navn for de kvalificerede deltagere en given aften."""
         return self._qualifiers(bar_date)
+
+    def night_presence(self, bar_date: str) -> dict[int, int]:
+        """Rå tid i baren pr. bruger den aften – UDEN selskabskravet.
+
+        Bruges kun som tiebreaker for titler: den, der faktisk sad længst i
+        baren, skal ikke dele en titel med en, der gik tidligere. Manuelle
+        rettelser indgår ikke, da de hører til den optjente tid.
+        """
+        return dict(self.night_user_present.get(bar_date, {}))
 
     def night_arrivals(self, bar_date: str) -> dict[int, datetime]:
         """Tidligste ankomst pr. bruger den aften (rå tidsstempel, ikke gated)."""

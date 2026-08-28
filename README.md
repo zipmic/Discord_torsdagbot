@@ -597,7 +597,7 @@ Hver fredag kl. 12:00 sender botten en opsummering af torsdagens bar: hvem der d
 
 | Titel | Hvem får den |
 |---|---|
-| 👑 **Aftenens konge** | Længst online i alt den aften. Ved præcis lige tid deles titlen. |
+| 👑 **Aftenens konge** | Længst **optjent** tid den aften (dvs. kun tid med selskab, hvis `require_company` er slået til). Optjener flere præcis lige meget, vinder den, der faktisk sad længst i baren — er begge dele lige, deles titlen. |
 | 🏃 **Marathonmand** | Alle med **mere end 5 timer** samme aften. |
 | 🐦 **Early Bird** | Først online. |
 | 🦉 **Lukkede baren** | Sidst online — seneste registrerede sluttidspunkt. |

@@ -315,8 +315,12 @@ def build_group(module) -> app_commands.Group:
         else:
             engine = await module.build_engine()
             ns = engine.night_summary(d.isoformat())
+            # Forhåndsvisningen skal vise NØJAGTIGT det samme som den udsendte
+            # opsummering – inklusive aftenens titler (👑 Aftenens konge m.fl.).
+            awards = await module.night_awards(engine, d)
             embed = fmt.summary_embed(ns, module.name_of, module.tz,
-                                      show_records=module.config.summary_show_records)
+                                      show_records=module.config.summary_show_records,
+                                      awards=awards)
             await interaction.followup.send(
                 content="Forhåndsvisning (kun dig). Brug `gensend:True` for at sende den offentligt.",
                 embed=embed, ephemeral=True,

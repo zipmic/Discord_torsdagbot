@@ -145,7 +145,22 @@ def compute_night_awards(
     departures = {uid: t for uid, t in departures_all.items() if uid in qualified}
 
     # 👑 Aftenens konge – længst optjent tid, delt ved præcis lige tid.
+    #
+    # Med selskabskravet er optjent tid alene ikke nok til at kåre én konge:
+    # alle, der dækker hele det "sociale" tidsrum, får præcis samme optjente
+    # tid, selv om den ene sad flere timer længere i baren. Derfor brydes
+    # uafgjort på den rå tid i baren, så kronen kun deles, når begge dele er
+    # lige. Optjent tid er stadig det primære mål, så man kan ikke vinde
+    # kronen på tid, man sad alene.
     awards.kings, awards.king_seconds = _max_holders(qualified)
+    if awards.king_seconds <= 0:
+        awards.kings = []          # ingen optjent tid = ingen konge
+    elif len(awards.kings) > 1:
+        presence = engine.night_presence(bar_date)
+        longest_present = max(presence.get(uid, 0) for uid in awards.kings)
+        awards.kings = [
+            uid for uid in awards.kings if presence.get(uid, 0) == longest_present
+        ]
 
     # 🏃 Marathonmand – alle over grænsen.
     awards.marathon = sorted(

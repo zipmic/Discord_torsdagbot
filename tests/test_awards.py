@@ -71,12 +71,14 @@ class NightBuilder:
         )
         return self
 
-    def engine(self, min_minutes=5, cancelled=False, extra_sessions=None):
+    def engine(self, min_minutes=5, cancelled=False, extra_sessions=None,
+               require_company=False):
         nights = {self.bar_date: Night(self.bar_date, cancelled, False, None, None)}
         sessions = self.sessions + list(extra_sessions or [])
         for s in sessions:
             nights.setdefault(s.bar_date, Night(s.bar_date, False, False, None, None))
-        return Engine(sessions, nights, [], min_minutes * 60, require_company=False)
+        return Engine(sessions, nights, [], min_minutes * 60,
+                      require_company=require_company)
 
 
 def awards_for(builder, votes, rules=AwardRules(), **kw):
@@ -108,6 +110,53 @@ def test_king_and_marathon():
     b4 = NightBuilder().add(1, "A", 19, 0, 0, 0, next_day=True).add(2, "B", 19, 0, 20, 0)
     _, a4 = awards_for(b4, {})
     check("præcis 5 timer er IKKE marathon", a4.marathon == [])
+
+
+def test_king_with_company_rule():
+    """👑 med selskabskravet slået TIL – som i produktionen.
+
+    Med selskabskravet får alle, der dækker hele det "sociale" tidsrum, præcis
+    samme optjente tid. Uden en tiebreaker ville kronen derfor altid blive delt
+    – også når den ene sad flere timer længere i baren.
+    """
+    print("\n== 👑 Aftenens konge med selskabskravet (produktion) ==")
+
+    # A sad 4 timer, B kun 2. Begge optjener 2 timer (kun tiden sammen tæller),
+    # men A var reelt længst i baren og skal have kronen alene.
+    b = NightBuilder().add(1, "A", 19, 0, 23, 0).add(2, "B", 19, 0, 21, 0)
+    _, a = awards_for(b, {}, require_company=True)
+    check("begge optjener 2 timer", a.king_seconds == 2 * 3600)
+    check("A får kronen alene (sad længst)", a.kings == [1])
+
+    # Tre mand: A blev en time længere end de to andre.
+    b2 = (NightBuilder()
+          .add(1, "A", 19, 0, 1, 0, next_day=True)
+          .add(2, "B", 19, 0, 0, 0, next_day=True)
+          .add(3, "C", 19, 0, 0, 0, next_day=True))
+    _, a2 = awards_for(b2, {}, require_company=True)
+    check("A får kronen alene blandt tre", a2.kings == [1])
+
+    # Ægte uafgjort: nøjagtig samme tid i baren -> delt krone.
+    b3 = NightBuilder().add(1, "A", 19, 0, 23, 0).add(2, "B", 19, 0, 23, 0)
+    _, a3 = awards_for(b3, {}, require_company=True)
+    check("delt krone ved præcis samme tid i baren", a3.kings == [1, 2])
+
+    # Man kan ikke vinde kronen på tid, man sad alene: A sad 2 timer, men var
+    # alene den sidste time. C og D sad 3 timer sammen og optjener mest.
+    b4 = (NightBuilder()
+          .add(1, "A", 19, 0, 21, 0)
+          .add(2, "B", 19, 0, 20, 0)
+          .add(3, "C", 22, 0, 1, 0, next_day=True)
+          .add(4, "D", 22, 0, 1, 0, next_day=True))
+    _, a4 = awards_for(b4, {}, require_company=True)
+    check("solo-tid giver ikke kronen", a4.kings == [3, 4])
+    check("kronens tid = 3 timer med selskab", a4.king_seconds == 3 * 3600)
+
+    # Ingen overlap overhovedet -> ingen optjent tid -> ingen konge, heller
+    # ikke når minimumsgrænsen er sat til 0.
+    b5 = NightBuilder().add(1, "A", 19, 0, 20, 0).add(2, "B", 21, 0, 23, 0)
+    _, a5 = awards_for(b5, {}, require_company=True, min_minutes=0)
+    check("ingen konge uden optjent tid", a5.kings == [])
 
 
 def test_early_bird_and_closer():
@@ -520,6 +569,7 @@ def test_all_submodules_eagerly_imported():
 async def main():
     test_all_submodules_eagerly_imported()
     test_king_and_marathon()
+    test_king_with_company_rule()
     test_early_bird_and_closer()
     test_kept_promise()
     test_surprise()
