@@ -159,6 +159,58 @@ def test_king_with_company_rule():
     check("ingen konge uden optjent tid", a5.kings == [])
 
 
+def test_waiting_for_players():
+    """⏳ Waiting for players... – den der sad længst alene i baren."""
+    print("\n== ⏳ Waiting for players... ==")
+
+    # A kom kl. 19 og sad alene til B kom kl. 21 -> 2 timers ventetid.
+    b = NightBuilder().add(1, "A", 19, 0, 23, 0).add(2, "B", 21, 0, 23, 0)
+    eng, a = awards_for(b, {}, require_company=True)
+    check("A ventede 2 timer", a.waiting == [1] and a.waiting_seconds == 2 * 3600)
+    check("B ventede ikke", eng.night_alone(BD).get(2, 0) == 0)
+
+    # Ventetid både før og efter selskabet lægges sammen.
+    b2 = NightBuilder().add(1, "A", 19, 0, 0, 0, next_day=True).add(2, "B", 20, 0, 23, 0)
+    _, a2 = awards_for(b2, {}, require_company=True)
+    check("1 time før + 1 time efter = 2 timers ventetid",
+          a2.waiting == [1] and a2.waiting_seconds == 2 * 3600)
+
+    # Den, der venter LÆNGST, vinder – delt ved præcis lige lang ventetid.
+    # A og B sad hver en time alene på hver sit tidspunkt; C og D kom sammen.
+    b3 = (NightBuilder()
+          .add(1, "A", 19, 0, 20, 0)
+          .add(2, "B", 21, 0, 22, 0)
+          .add(3, "C", 23, 0, 1, 0, next_day=True)
+          .add(4, "D", 23, 0, 1, 0, next_day=True))
+    _, a3 = awards_for(b3, {}, require_company=True)
+    check("delt ⏳ ved lige lang ventetid", a3.waiting == [1, 2])
+
+    # Under grænsen tæller ikke.
+    b4 = NightBuilder().add(1, "A", 19, 0, 23, 0).add(2, "B", 19, 10, 23, 0)
+    _, a4 = awards_for(b4, {}, require_company=True)
+    check("10 minutter alene er under grænsen", a4.waiting == [])
+
+    # ... men gør det med en lavere grænse.
+    _, a5 = awards_for(b4, {}, rules=AwardRules(alone_min_seconds=5 * 60),
+                       require_company=True)
+    check("med 5-minutters grænse tæller de 10 minutter", a5.waiting == [1])
+
+    # Den, der sad alene og derfor IKKE kvalificerede sig, kan stadig få
+    # titlen – det er jo netop dem, den handler om.
+    b6 = (NightBuilder()
+          .add(1, "A", 19, 0, 23, 0)
+          .add(2, "B", 19, 0, 23, 0)
+          .add(3, "Ensomme", 1, 0, 2, 30, day=BAR_DATE + timedelta(days=1)))
+    eng6, a6 = awards_for(b6, {}, require_company=True)
+    check("Ensomme kvalificerede sig ikke", 3 not in eng6.qualifiers(BD))
+    check("men får ⏳ for 1,5 times ensom ventetid",
+          a6.waiting == [3] and a6.waiting_seconds == 90 * 60)
+
+    # Ventetiden er den samme, uanset om selskabskravet er slået til.
+    _, a7 = awards_for(b, {}, require_company=False)
+    check("ventetid uafhængig af selskabskravet", a7.waiting_seconds == 2 * 3600)
+
+
 def test_early_bird_and_closer():
     print("\n== 🐦 Early Bird og 🦉 Lukkede baren ==")
     b = (NightBuilder()
@@ -570,6 +622,7 @@ async def main():
     test_all_submodules_eagerly_imported()
     test_king_and_marathon()
     test_king_with_company_rule()
+    test_waiting_for_players()
     test_early_bird_and_closer()
     test_kept_promise()
     test_surprise()

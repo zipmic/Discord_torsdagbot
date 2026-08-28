@@ -352,6 +352,7 @@ class TorsdagsbarModule:
             marathon_seconds=int(self.config.marathon_hours * 3600),
             speedrun_min_seconds=self.config.speedrun_min_minutes * 60,
             big_words_seconds=int(self.config.big_words_hours * 3600),
+            alone_min_seconds=self.config.waiting_min_minutes * 60,
         )
 
     async def night_awards(self, engine: Engine, bar_date: date):

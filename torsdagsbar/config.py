@@ -63,6 +63,8 @@ class TorsdagsbarConfig:
     speedrun_min_minutes: int = 10
     # Hvor mange timer efter løftets slut man får 🤥 Store ord.
     big_words_hours: float = 2.0
+    # Mindste tid alene i baren for at kunne få ⏳ Waiting for players...
+    waiting_min_minutes: int = 15
 
     # Sekunder mellem trackerens periodiske tjek (heartbeat, 19:00/03:00-grænser).
     tick_seconds: int = 30
@@ -207,6 +209,7 @@ def load_torsdagsbar_config(
     vote_sync_seconds = geti("vote_sync_seconds", "TB_VOTE_SYNC_SECONDS", 180)
     vote_sync_seconds = max(30, min(vote_sync_seconds, 3600))
     speedrun_min = geti("speedrun_min_minutes", "TB_SPEEDRUN_MIN_MINUTES", 10)
+    waiting_min = geti("waiting_min_minutes", "TB_WAITING_MIN_MINUTES", 15)
 
     def getf(key: str, env_key: str, default: float) -> float:
         raw = get(key, env_key)
@@ -278,6 +281,7 @@ def load_torsdagsbar_config(
         marathon_hours=marathon_hours,
         speedrun_min_minutes=speedrun_min,
         big_words_hours=big_words_hours,
+        waiting_min_minutes=waiting_min,
         tick_seconds=tick_seconds,
         db_path=db_path,
         guild_id=guild_id,

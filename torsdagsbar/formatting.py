@@ -401,6 +401,12 @@ def award_fields(
             "⚡ Speedrun",
             f"{_names(awards.speedrun, name_of)} — {fmt_duration(awards.speedrun_seconds)}",
         ))
+    if awards.waiting:
+        felter.append((
+            "⏳ Waiting for players...",
+            f"{_names(awards.waiting, name_of)} — sad {fmt_duration(awards.waiting_seconds)} "
+            f"alene i baren",
+        ))
     if awards.big_words:
         felter.append((
             "🤥 Store ord",
@@ -551,6 +557,13 @@ def profile_embed(
             inline=True,
         )
 
+    # ⏳ Hvor længe man har ventet på selskab
+    if tally.alone_seconds:
+        værdi = fmt_duration(tally.alone_seconds)
+        if tally.waiting:
+            værdi += f" · vandt ⏳ {tally.waiting} gange"
+        embed.add_field(name="⏳ Ventet på selskab", value=værdi, inline=True)
+
     # 🎯 Holdt hvad du lovede
     if tally.promised:
         embed.add_field(
@@ -567,6 +580,7 @@ def profile_embed(
         ("🦉", "Lukkede baren", tally.closer),
         ("⚡", "Speedrun", tally.speedrun),
         ("🎭", "Surprise!", tally.surprise),
+        ("⏳", "Waiting for players...", tally.waiting),
         ("🤥", "Store ord", tally.big_words),
         ("🐌", "Slow starter", tally.slow_starter),
     ]

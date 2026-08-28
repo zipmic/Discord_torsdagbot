@@ -604,12 +604,20 @@ Hver fredag kl. 12:00 sender botten en opsummering af torsdagens bar: hvem der d
 | 🎯 **Holdt hvad du lovede** | Kom online inden for det tidsrum, de stemte på. |
 | 🎭 **Surprise!** | Stemte "Jeg kommer ikke", men dukkede alligevel op. |
 | ⚡ **Speedrun** | Aftenens korteste gyldige besøg — mindst **10 minutter**, så korte forbindelsesfejl ikke tæller. |
+| ⏳ **Waiting for players...** | Sad længst i baren **uden selskab** — og hvor længe. Kræver mindst **15 minutter** alene. Her tæller **alle**, der var i baren, ikke kun dem der kvalificerede sig: den, der sad helt alene, optjener jo netop ingen tid. |
 | 🤥 **Store ord** | Stemte på et bestemt tidsrum, men kom mindst **2 timer** efter dets slutning. |
 | 🐌 **Slow starter** | Aftenens største forsinkelse i forhold til det lovede tidsrum. |
 
 "Efter 21:00", "Efter 22:00" og "Jeg kommer ikke" har ikke et præcist sluttidspunkt og tæller derfor **ikke** med i 🤥 og 🐌.
 
-Grænserne kan justeres med `marathon_hours`, `speedrun_min_minutes` og `big_words_hours`.
+Grænserne kan justeres med `marathon_hours`, `speedrun_min_minutes`, `big_words_hours` og
+`waiting_min_minutes`.
+
+**Ventetid** (⏳) er tid i baren minus tid med selskab, og beregnes altid — også når
+`require_company` er slået fra. Sidder nogen i en anden registreret voicekanal, tæller
+det som selskab. Profilkortet viser den samlede ventetid for perioden under
+**⏳ Ventet på selskab**; her tælles også de aftener, hvor man sad helt alene, og natten
+derfor slet ikke blev en tællende torsdagsbar.
 
 ### ⏰ "Du er sent på den"
 
