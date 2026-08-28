@@ -374,7 +374,7 @@ Alt sættes i `.env` (eller `config.json`, undtagen tokenet).
 | `CHANNEL_ID` | – | **Påkrævet.** Kanalen afstemningen sendes i. |
 | `OWNER_ID` | – | Den eneste bruger der må køre `/testvote`. |
 | `GUILD_ID` | tom | Server-ID. Gør `/testvote` synlig med det samme. |
-| `POLL_WEEKDAY` | `3` | 0 = mandag … 3 = torsdag … 6 = søndag. |
+| `POLL_WEEKDAY` | `3` | 0 = mandag … 3 = torsdag … 6 = søndag. Afstemningen behøver ikke ligge på selve bar-dagen: stemmerne knyttes altid til den **kommende** torsdagsbar. |
 | `POLL_HOUR` | `15` | Time (0–23). |
 | `POLL_MINUTE` | `0` | Minut (0–59). |
 | `TIMEZONE` | `Europe/Copenhagen` | Tidszone. |
@@ -597,19 +597,27 @@ Hver fredag kl. 12:00 sender botten en opsummering af torsdagens bar: hvem der d
 
 | Titel | Hvem får den |
 |---|---|
-| 👑 **Aftenens konge** | Længst online i alt den aften. Ved præcis lige tid deles titlen. |
+| 👑 **Aftenens konge** | Længst **optjent** tid den aften (dvs. kun tid med selskab, hvis `require_company` er slået til). Optjener flere præcis lige meget, vinder den, der faktisk sad længst i baren — er begge dele lige, deles titlen. |
 | 🏃 **Marathonmand** | Alle med **mere end 5 timer** samme aften. |
-| 🐦 **Early Bird** | Først online. |
-| 🦉 **Lukkede baren** | Sidst online — seneste registrerede sluttidspunkt. |
+| 🐦 **Early Bird** | Først online. De, der allerede sad i kanalen, da baren åbnede, får alle registreringens starttidspunkt og deler derfor titlen — teksten siger så "sad der allerede, da baren åbnede". Deler **samtlige** deltagere den, siger den ingenting, og titlen udelades. |
+| 🦉 **Lukkede baren** | Sidst online — seneste registrerede sluttidspunkt. Samme regel som 🐦: alle, der stadig sad der kl. 03:00, deler titlen, og den udelades hvis det gælder alle. |
 | 🎯 **Holdt hvad du lovede** | Kom online inden for det tidsrum, de stemte på. |
 | 🎭 **Surprise!** | Stemte "Jeg kommer ikke", men dukkede alligevel op. |
 | ⚡ **Speedrun** | Aftenens korteste gyldige besøg — mindst **10 minutter**, så korte forbindelsesfejl ikke tæller. |
+| ⏳ **Waiting for players...** | Sad længst i baren **uden selskab** — og hvor længe. Kræver mindst **15 minutter** alene. Her tæller **alle**, der var i baren, ikke kun dem der kvalificerede sig: den, der sad helt alene, optjener jo netop ingen tid. |
 | 🤥 **Store ord** | Stemte på et bestemt tidsrum, men kom mindst **2 timer** efter dets slutning. |
 | 🐌 **Slow starter** | Aftenens største forsinkelse i forhold til det lovede tidsrum. |
 
 "Efter 21:00", "Efter 22:00" og "Jeg kommer ikke" har ikke et præcist sluttidspunkt og tæller derfor **ikke** med i 🤥 og 🐌.
 
-Grænserne kan justeres med `marathon_hours`, `speedrun_min_minutes` og `big_words_hours`.
+Grænserne kan justeres med `marathon_hours`, `speedrun_min_minutes`, `big_words_hours` og
+`waiting_min_minutes`.
+
+**Ventetid** (⏳) er tid i baren minus tid med selskab, og beregnes altid — også når
+`require_company` er slået fra. Sidder nogen i en anden registreret voicekanal, tæller
+det som selskab. Profilkortet viser den samlede ventetid for perioden under
+**⏳ Ventet på selskab**; her tælles også de aftener, hvor man sad helt alene, og natten
+derfor slet ikke blev en tællende torsdagsbar.
 
 ### ⏰ "Du er sent på den"
 

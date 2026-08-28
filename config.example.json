@@ -33,6 +33,7 @@
     "marathon_hours": 5,
     "speedrun_min_minutes": 10,
     "big_words_hours": 2,
+    "waiting_min_minutes": 15,
     "vote_sync_seconds": 180,
     "admin_role_name": "Torsdagsbar-admin",
     "admin_role_id": null,

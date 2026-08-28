@@ -32,6 +32,7 @@ class AwardRules:
     marathon_seconds: int = 5 * 3600      # 🏃 mere end 5 timer
     speedrun_min_seconds: int = 10 * 60   # ⚡ mindst 10 minutter for at tælle
     big_words_seconds: int = 2 * 3600     # 🤥 mindst 2 timer for sent
+    alone_min_seconds: int = 15 * 60      # ⏳ mindst 15 minutter alene for at tælle
 
 
 @dataclass
@@ -45,12 +46,18 @@ class NightAwards:
     marathon: list[tuple[int, int]] = field(default_factory=list)  # 🏃 (uid, sek)
     early_birds: list[int] = field(default_factory=list)       # 🐦
     early_bird_at: Optional[datetime] = None
+    # True når ankomsten er selve vinduets start, dvs. de sad der allerede.
+    early_bird_from_open: bool = False
     closers: list[int] = field(default_factory=list)           # 🦉
     closer_at: Optional[datetime] = None
+    # True når afgangen er selve vinduets slut, dvs. de sad der til det sidste.
+    closer_at_close: bool = False
     kept_promise: list[int] = field(default_factory=list)      # 🎯
     surprises: list[int] = field(default_factory=list)         # 🎭
     speedrun: list[int] = field(default_factory=list)          # ⚡
     speedrun_seconds: int = 0
+    waiting: list[int] = field(default_factory=list)            # ⏳ længst alene
+    waiting_seconds: int = 0
     big_words: list[tuple[int, int]] = field(default_factory=list)   # 🤥 (uid, forsinkelse)
     slow_starters: list[tuple[int, int]] = field(default_factory=list)  # 🐌 (uid, forsinkelse)
 
@@ -59,7 +66,7 @@ class NightAwards:
         return bool(
             self.kings or self.marathon or self.early_birds or self.closers
             or self.kept_promise or self.surprises or self.speedrun
-            or self.big_words or self.slow_starters
+            or self.waiting or self.big_words or self.slow_starters
         )
 
 
@@ -75,6 +82,9 @@ class AwardTally:
     surprise: int = 0
     big_words: int = 0
     slow_starter: int = 0
+    # ⏳ Waiting for players...: antal gange vundet + samlet ventetid i perioden.
+    waiting: int = 0
+    alone_seconds: int = 0
     # 🎯 Holdt hvad du lovede: holdt / antal aftener med et løfte.
     kept: int = 0
     promised: int = 0
@@ -137,7 +147,7 @@ def compute_night_awards(
         day = date.fromisoformat(bar_date)
     except ValueError:
         return awards
-    window_start, _ = schedule.window_of(day)
+    window_start, window_end = schedule.window_of(day)
 
     arrivals_all = engine.night_arrivals(bar_date)
     departures_all = engine.night_departures(bar_date)
@@ -145,7 +155,22 @@ def compute_night_awards(
     departures = {uid: t for uid, t in departures_all.items() if uid in qualified}
 
     # 👑 Aftenens konge – længst optjent tid, delt ved præcis lige tid.
+    #
+    # Med selskabskravet er optjent tid alene ikke nok til at kåre én konge:
+    # alle, der dækker hele det "sociale" tidsrum, får præcis samme optjente
+    # tid, selv om den ene sad flere timer længere i baren. Derfor brydes
+    # uafgjort på den rå tid i baren, så kronen kun deles, når begge dele er
+    # lige. Optjent tid er stadig det primære mål, så man kan ikke vinde
+    # kronen på tid, man sad alene.
     awards.kings, awards.king_seconds = _max_holders(qualified)
+    if awards.king_seconds <= 0:
+        awards.kings = []          # ingen optjent tid = ingen konge
+    elif len(awards.kings) > 1:
+        presence = engine.night_presence(bar_date)
+        longest_present = max(presence.get(uid, 0) for uid in awards.kings)
+        awards.kings = [
+            uid for uid in awards.kings if presence.get(uid, 0) == longest_present
+        ]
 
     # 🏃 Marathonmand – alle over grænsen.
     awards.marathon = sorted(
@@ -154,14 +179,42 @@ def compute_night_awards(
     )
 
     # 🐦 Early Bird / 🦉 Lukkede baren
+    #
+    # Registreringen starter kl. 19:00 for alle, der allerede sad i kanalen, så
+    # de får præcis samme ankomsttidspunkt – og tilsvarende samme afgang, hvis
+    # de stadig sad der kl. 03:00. Deler SAMTLIGE deltagere titlen, siger den
+    # ingenting, og så udelades den. Deler nogle af dem den, beholdes den, men
+    # teksten fortæller hvorfor tidspunktet er ens.
     awards.early_birds, awards.early_bird_at = _earliest(arrivals)
+    awards.early_bird_from_open = awards.early_bird_at == window_start
+    if len(arrivals) > 1 and len(awards.early_birds) == len(arrivals):
+        awards.early_birds, awards.early_bird_at = [], None
+        awards.early_bird_from_open = False
+
     awards.closers, awards.closer_at = _latest(departures)
+    awards.closer_at_close = awards.closer_at == window_end
+    if len(departures) > 1 and len(awards.closers) == len(departures):
+        awards.closers, awards.closer_at = [], None
+        awards.closer_at_close = False
 
     # ⚡ Speedrun – korteste gyldige besøg (mindst 10 min).
     speedrun_candidates = {
         uid: sec for uid, sec in qualified.items() if sec >= rules.speedrun_min_seconds
     }
     awards.speedrun, awards.speedrun_seconds = _min_holders(speedrun_candidates)
+
+    # ⏳ Waiting for players... – den, der sad længst i baren uden selskab.
+    #
+    # Her er grundmængden ALLE, der var i baren den aften – ikke kun de
+    # kvalificerede. Den, der sad alene, optjener jo netop ingen tid og ville
+    # ellers aldrig kunne få titlen, selv om det er præcis dem, den handler om.
+    # Til gengæld kræves et minimum, så et kort ophold ikke vinder den.
+    alone = {
+        uid: sec
+        for uid, sec in engine.night_alone(bar_date).items()
+        if sec >= rules.alone_min_seconds
+    }
+    awards.waiting, awards.waiting_seconds = _max_holders(alone)
 
     # Resten kræver, at vi kender brugerens stemme.
     for uid, sec in qualified.items():
@@ -249,6 +302,8 @@ def tally_for_user(
             tally.big_words += 1
         if any(uid == user_id for uid, _ in awards.slow_starters):
             tally.slow_starter += 1
+        if user_id in awards.waiting:
+            tally.waiting += 1
 
         # 🎯-statistikken: alle aftener hvor brugeren afgav et løfte.
         option_key = votes.get(user_id)
@@ -257,6 +312,10 @@ def tally_for_user(
             tally.promised += 1
             if user_id in awards.kept_promise:
                 tally.kept += 1
+
+    # Ventetiden tælles over ALLE aftener i perioden – også dem hvor brugeren
+    # sad helt alene, og natten derfor ikke blev en tællende torsdagsbar.
+    tally.alone_seconds = engine.alone_seconds(user_id, start, end)
     return tally
 
 
@@ -300,6 +359,8 @@ def earned_badges(
         badges.append(Badge("🎯", "Pålidelig", f"Holder løftet {tally.kept_pct:.0f}% af gangene"))
     if tally.surprise >= 3:
         badges.append(Badge("🎭", "Uforudsigelig", f"{tally.surprise} overraskelser"))
+    if tally.waiting >= 3:
+        badges.append(Badge("⏳", "Tålmodig", f"Ventede længst på selskab {tally.waiting} gange"))
 
     return badges
 
@@ -328,7 +389,7 @@ def typical_arrival_minutes(
             day = date.fromisoformat(bar_date)
         except ValueError:
             continue
-        window_start, _ = schedule.window_of(day)
+        window_start, window_end = schedule.window_of(day)
         offsets.append(
             int((arrival.astimezone(schedule.tz) - window_start).total_seconds() // 60)
         )

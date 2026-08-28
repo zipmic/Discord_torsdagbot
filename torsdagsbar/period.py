@@ -101,6 +101,21 @@ class Schedule:
     def is_active(self, now: datetime) -> bool:
         return self.current_bar_date(now) is not None
 
+    def poll_bar_date(self, now: datetime) -> date:
+        """Hvilken torsdagsbar handler en afstemning sendt nu om?
+
+        Afstemningen kan sendes en hvilken som helst ugedag (``POLL_WEEKDAY``),
+        og den handler altid om den **kommende** torsdagsbar — eller den, der er
+        i gang lige nu. ``most_recent_bar_date`` peger derimod bagud og ville
+        gemme stemmerne under en bar, der allerede er overstået.
+        """
+        current = self.current_bar_date(now)
+        if current is not None:
+            return current  # afstemningen sendt midt i baren
+        local = now.astimezone(self.tz)
+        days_ahead = (self.weekday - local.weekday()) % 7
+        return local.date() + timedelta(days=days_ahead)
+
     def next_start(self, now: datetime) -> datetime:
         """Næste kommende starttidspunkt (lokal). Hvis vi er aktive lige nu,
         returneres NÆSTE uges start."""

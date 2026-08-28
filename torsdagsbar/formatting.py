@@ -377,14 +377,22 @@ def award_fields(
             ),
         ))
     if awards.early_birds and awards.early_bird_at:
+        klokken = fmt_clock(awards.early_bird_at, tz)
         felter.append((
             "🐦 Early Bird",
-            f"{_names(awards.early_birds, name_of)} ({fmt_clock(awards.early_bird_at, tz)})",
+            f"{_names(awards.early_birds, name_of)} — sad der allerede, da baren "
+            f"åbnede ({klokken})"
+            if awards.early_bird_from_open
+            else f"{_names(awards.early_birds, name_of)} ({klokken})",
         ))
     if awards.closers and awards.closer_at:
+        klokken = fmt_clock(awards.closer_at, tz)
         felter.append((
             "🦉 Lukkede baren",
-            f"{_names(awards.closers, name_of)} ({fmt_clock(awards.closer_at, tz)})",
+            f"{_names(awards.closers, name_of)} — sad der stadig, da baren "
+            f"lukkede ({klokken})"
+            if awards.closer_at_close
+            else f"{_names(awards.closers, name_of)} ({klokken})",
         ))
     if awards.kept_promise:
         felter.append((
@@ -400,6 +408,12 @@ def award_fields(
         felter.append((
             "⚡ Speedrun",
             f"{_names(awards.speedrun, name_of)} — {fmt_duration(awards.speedrun_seconds)}",
+        ))
+    if awards.waiting:
+        felter.append((
+            "⏳ Waiting for players...",
+            f"{_names(awards.waiting, name_of)} — sad {fmt_duration(awards.waiting_seconds)} "
+            f"alene i baren",
         ))
     if awards.big_words:
         felter.append((
@@ -551,6 +565,13 @@ def profile_embed(
             inline=True,
         )
 
+    # ⏳ Hvor længe man har ventet på selskab
+    if tally.alone_seconds:
+        værdi = fmt_duration(tally.alone_seconds)
+        if tally.waiting:
+            værdi += f" · vandt ⏳ {tally.waiting} gange"
+        embed.add_field(name="⏳ Ventet på selskab", value=værdi, inline=True)
+
     # 🎯 Holdt hvad du lovede
     if tally.promised:
         embed.add_field(
@@ -567,6 +588,7 @@ def profile_embed(
         ("🦉", "Lukkede baren", tally.closer),
         ("⚡", "Speedrun", tally.speedrun),
         ("🎭", "Surprise!", tally.surprise),
+        ("⏳", "Waiting for players...", tally.waiting),
         ("🤥", "Store ord", tally.big_words),
         ("🐌", "Slow starter", tally.slow_starter),
     ]
@@ -591,14 +613,32 @@ def profile_embed(
 # ---------------------------------------------------------------------------
 # 💬 Citat-bogen
 # ---------------------------------------------------------------------------
-def _quote_line(quote, name_of: NameResolver, tz: ZoneInfo, *, med_id: bool = True) -> str:
+# Discords grænse for en embeds description. Citat-listen skal holde sig under
+# den, ellers afviser Discord hele beskeden, og /quotes fejler.
+DESCRIPTION_MAX = 4096
+
+
+def afkort(tekst: str, maks: int) -> str:
+    """Afkort en tekst pænt til ``maks`` tegn (inkl. den afsluttende ellipse)."""
+    if len(tekst) <= maks:
+        return tekst
+    if maks <= 1:
+        return "…"[:maks]
+    return tekst[: maks - 1].rstrip() + "…"
+
+
+def _quote_line(
+    quote, name_of: NameResolver, tz: ZoneInfo, *, med_id: bool = True,
+    maks_tekst: Optional[int] = None,
+) -> str:
     dato = ""
     if quote.created_at:
         lokal = to_local(quote.created_at, tz)
         dato = f" · {lokal.strftime('%d-%m-%Y')}"
     tilføjet = f" · tilføjet af {name_of(quote.added_by)}" if quote.added_by else ""
     prefix = f"`#{quote.id}` " if med_id else ""
-    return f"{prefix}*”{quote.text}”*{tilføjet}{dato}"
+    tekst = quote.text if maks_tekst is None else afkort(quote.text, maks_tekst)
+    return f"{prefix}*”{tekst}”*{tilføjet}{dato}"
 
 
 def quote_embed(quote, name_of: NameResolver, tz: ZoneInfo, *, titel: Optional[str] = None) -> discord.Embed:
@@ -636,9 +676,23 @@ def quotes_embed(
         return embed
 
     start = page * per_page
-    embed.description = "\n\n".join(
-        _quote_line(q, name_of, tz) for q in quotes[start : start + per_page]
-    )
+    side = quotes[start : start + per_page]
+
+    # Hvert citat må fylde 900 tegn, så en fuld side kan sprænge Discords
+    # grænse på 4096. Afkort citaterne, så hele siden går ind – hele citatet
+    # kan altid ses med /quote vis.
+    linjer = [_quote_line(q, name_of, tz) for q in side]
+    if sum(len(l) for l in linjer) + 2 * max(0, len(linjer) - 1) > DESCRIPTION_MAX:
+        # Fordel pladsen ligeligt og træk længden af selve pyntningen fra.
+        pynt = max(
+            (len(l) - len(q.text) for l, q in zip(linjer, side)), default=0
+        )
+        plads = (DESCRIPTION_MAX - 2 * max(0, len(side) - 1)) // max(1, len(side))
+        linjer = [
+            _quote_line(q, name_of, tz, maks_tekst=max(20, plads - pynt))
+            for q in side
+        ]
+    embed.description = afkort("\n\n".join(linjer), DESCRIPTION_MAX)
     embed.set_footer(
         text=f"Torsdagsbar · {len(quotes)} citat(er) · Side {page + 1}/{pages}"
     )
