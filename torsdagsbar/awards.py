@@ -46,8 +46,12 @@ class NightAwards:
     marathon: list[tuple[int, int]] = field(default_factory=list)  # 🏃 (uid, sek)
     early_birds: list[int] = field(default_factory=list)       # 🐦
     early_bird_at: Optional[datetime] = None
+    # True når ankomsten er selve vinduets start, dvs. de sad der allerede.
+    early_bird_from_open: bool = False
     closers: list[int] = field(default_factory=list)           # 🦉
     closer_at: Optional[datetime] = None
+    # True når afgangen er selve vinduets slut, dvs. de sad der til det sidste.
+    closer_at_close: bool = False
     kept_promise: list[int] = field(default_factory=list)      # 🎯
     surprises: list[int] = field(default_factory=list)         # 🎭
     speedrun: list[int] = field(default_factory=list)          # ⚡
@@ -143,7 +147,7 @@ def compute_night_awards(
         day = date.fromisoformat(bar_date)
     except ValueError:
         return awards
-    window_start, _ = schedule.window_of(day)
+    window_start, window_end = schedule.window_of(day)
 
     arrivals_all = engine.night_arrivals(bar_date)
     departures_all = engine.night_departures(bar_date)
@@ -175,8 +179,23 @@ def compute_night_awards(
     )
 
     # 🐦 Early Bird / 🦉 Lukkede baren
+    #
+    # Registreringen starter kl. 19:00 for alle, der allerede sad i kanalen, så
+    # de får præcis samme ankomsttidspunkt – og tilsvarende samme afgang, hvis
+    # de stadig sad der kl. 03:00. Deler SAMTLIGE deltagere titlen, siger den
+    # ingenting, og så udelades den. Deler nogle af dem den, beholdes den, men
+    # teksten fortæller hvorfor tidspunktet er ens.
     awards.early_birds, awards.early_bird_at = _earliest(arrivals)
+    awards.early_bird_from_open = awards.early_bird_at == window_start
+    if len(arrivals) > 1 and len(awards.early_birds) == len(arrivals):
+        awards.early_birds, awards.early_bird_at = [], None
+        awards.early_bird_from_open = False
+
     awards.closers, awards.closer_at = _latest(departures)
+    awards.closer_at_close = awards.closer_at == window_end
+    if len(departures) > 1 and len(awards.closers) == len(departures):
+        awards.closers, awards.closer_at = [], None
+        awards.closer_at_close = False
 
     # ⚡ Speedrun – korteste gyldige besøg (mindst 10 min).
     speedrun_candidates = {
@@ -370,7 +389,7 @@ def typical_arrival_minutes(
             day = date.fromisoformat(bar_date)
         except ValueError:
             continue
-        window_start, _ = schedule.window_of(day)
+        window_start, window_end = schedule.window_of(day)
         offsets.append(
             int((arrival.astimezone(schedule.tz) - window_start).total_seconds() // 60)
         )

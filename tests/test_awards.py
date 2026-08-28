@@ -224,6 +224,54 @@ def test_early_bird_and_closer():
     check("lukketidspunkt", a.closer_at.astimezone(TZ).strftime("%H:%M") == "02:35")
 
 
+def test_early_bird_shared_by_everyone():
+    """🐦/🦉 må ikke deles af samtlige deltagere.
+
+    Alle, der allerede sad i kanalen kl. 19:00, får præcis samme
+    ankomsttidspunkt af trackeren, og alle der stadig sad der kl. 03:00 får
+    samme afgang. Uden en regel ville hele baren dele begge titler.
+    """
+    print("\n== 🐦 Early Bird / 🦉 Lukkede baren deles ikke af alle ==")
+
+    # Fem sad der fra 19:00 til 03:00 – nøjagtig samme ankomst OG afgang.
+    b = NightBuilder()
+    for uid in range(1, 6):
+        b.add(uid, f"B{uid}", 19, 0, 3, 0, next_day=True)
+    _, a = awards_for(b, {}, require_company=True)
+    check("🐦 udelades når alle deler den", a.early_birds == [])
+    check("🦉 udelades når alle deler den", a.closers == [])
+    check("👑 gives stadig", a.kings != [])
+
+    # Tre sad der fra start, to kom senere -> titlen beholdes for de tre.
+    b2 = (NightBuilder()
+          .add(1, "A", 19, 0, 23, 0)
+          .add(2, "B", 19, 0, 23, 0)
+          .add(3, "C", 19, 0, 23, 0)
+          .add(4, "D", 20, 0, 23, 0)
+          .add(5, "E", 21, 0, 22, 0))
+    _, a2 = awards_for(b2, {}, require_company=True)
+    check("🐦 beholdes når kun nogle deler den", a2.early_birds == [1, 2, 3])
+    check("markeret som 'sad der allerede'", a2.early_bird_from_open is True)
+    check("🦉 deles af de fire der blev til 23:00", a2.closers == [1, 2, 3, 4])
+    check("🦉 er ikke ved vinduets slut", a2.closer_at_close is False)
+
+    # Almindelig aften med forskellige tidspunkter -> uændret opførsel.
+    b3 = (NightBuilder()
+          .add(1, "A", 19, 30, 23, 0)
+          .add(2, "B", 20, 0, 23, 30)
+          .add(3, "C", 21, 0, 22, 0))
+    _, a3 = awards_for(b3, {}, require_company=True)
+    check("🐦 = den der kom først", a3.early_birds == [1])
+    check("ikke markeret som 'sad der allerede'", a3.early_bird_from_open is False)
+    check("🦉 = den der gik sidst", a3.closers == [2])
+
+    # Teksten i opsummeringen forklarer hvorfor tidspunktet er ens.
+    from torsdagsbar import formatting as fmt
+    felter = dict(fmt.award_fields(a2, lambda u: f"B{u}", TZ))
+    check("teksten nævner at de sad der allerede",
+          "allerede" in felter["🐦 Early Bird"])
+
+
 def test_kept_promise():
     print("\n== 🎯 Holdt hvad du lovede ==")
     b = (NightBuilder()
@@ -358,6 +406,73 @@ def test_tally_and_badges():
     check("typisk ankomst = 30 min efter 19:00", minutter == 30)
     from torsdagsbar import formatting as fmt
     check("vises som kl. 19:30", fmt.fmt_arrival_offset(minutter, 19, 0) == "kl. 19:30")
+
+
+def test_poll_bar_date():
+    """Afstemningen skal altid høre til den KOMMENDE torsdagsbar.
+
+    Afstemningsdagen er indstillelig (POLL_WEEKDAY). Bruges den bagudrettede
+    most_recent_bar_date, havner stemmerne under en bar, der allerede er
+    overstået, og så kan hverken forsinkelsesbeskeder eller 🎯/🤥/🐌/🎭 udløses.
+    """
+    print("\n== Afstemningens bardato (POLL_WEEKDAY) ==")
+    from datetime import date as _date
+    baren = _date(2026, 5, 14)          # torsdag
+    naeste = _date(2026, 5, 21)
+    uge = {0: _date(2026,5,11), 1: _date(2026,5,12), 2: _date(2026,5,13),
+           3: baren, 4: _date(2026,5,15), 5: _date(2026,5,16), 6: _date(2026,5,17)}
+
+    # Afstemning kl. 15:00 mandag-torsdag hører til torsdagens bar.
+    for wd in (0, 1, 2, 3):
+        d = uge[wd]
+        nu = datetime(d.year, d.month, d.day, 15, 0, tzinfo=TZ)
+        check(f"afstemning ugedag {wd} -> {baren}", SCHEDULE.poll_bar_date(nu) == baren)
+
+    # Fredag-søndag er torsdagens bar forbi: så gælder den næste.
+    for wd in (4, 5, 6):
+        d = uge[wd]
+        nu = datetime(d.year, d.month, d.day, 15, 0, tzinfo=TZ)
+        check(f"afstemning ugedag {wd} -> {naeste}", SCHEDULE.poll_bar_date(nu) == naeste)
+
+    # Midt i baren (og efter midnat) hører stemmerne til den igangværende bar.
+    check("torsdag 21:00 -> igangværende bar",
+          SCHEDULE.poll_bar_date(datetime(2026,5,14,21,0,tzinfo=TZ)) == baren)
+    check("fredag 01:00 (stadig i vinduet) -> samme bar",
+          SCHEDULE.poll_bar_date(datetime(2026,5,15,1,0,tzinfo=TZ)) == baren)
+    check("fredag 04:00 (vinduet lukket) -> næste bar",
+          SCHEDULE.poll_bar_date(datetime(2026,5,15,4,0,tzinfo=TZ)) == naeste)
+
+
+def test_set_total_correction():
+    """'Sæt samlet tid' skal ramme præcis det tal, admin skriver.
+
+    Kommandoen regnede før på summen af rå sessionsvarigheder. Med
+    selskabskravet – og ved overlappende sessioner – er det et helt andet tal
+    end det, statistikken viser, så resultatet blev forkert.
+    """
+    print("\n== /torsdagsbar korriger: 'Sæt samlet tid' ==")
+    from torsdagsbar.database import Correction
+
+    # A sad 19-01 (6 t), men kun 19-21 (2 t) sammen med B. Plus et overlap.
+    b = (NightBuilder()
+         .add(1, "A", 19, 0, 1, 0, next_day=True)
+         .add(1, "A", 20, 0, 22, 0)
+         .add(2, "B", 19, 0, 21, 0))
+    nights = {BD: Night(BD, False, False, None, None)}
+
+    def motor(corrections):
+        return Engine(list(b.sessions), nights, list(corrections), 5 * 60,
+                      require_company=True)
+
+    e = motor([])
+    check("motorens tal er 2 timer (ikke 6, ikke 8)", e.night_total(BD, 1) == 2 * 3600)
+
+    for maal_min in (180, 60, 0, 300):
+        current = motor([]).night_total(BD, 1)      # præcis som kommandoen gør
+        delta = maal_min * 60 - current
+        efter = motor([Correction(1, 1, BD, delta, "sat manuelt", 99)])
+        check(f"sæt {maal_min} min rammer {maal_min} min",
+              efter.night_total(BD, 1) == maal_min * 60)
 
 
 def test_promise_window():
@@ -624,6 +739,7 @@ async def main():
     test_king_with_company_rule()
     test_waiting_for_players()
     test_early_bird_and_closer()
+    test_early_bird_shared_by_everyone()
     test_kept_promise()
     test_surprise()
     test_speedrun()
@@ -632,6 +748,8 @@ async def main():
     test_embed_omits_empty()
     test_tally_and_badges()
     test_promise_window()
+    test_poll_bar_date()
+    test_set_total_correction()
     await test_year_periods()
     await test_late_notices()
     await test_vote_sync()

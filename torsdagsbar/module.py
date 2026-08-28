@@ -108,7 +108,7 @@ class TorsdagsbarModule:
         """Hovedbotten har sendt ugens afstemning – husk hvor den står."""
         if channel_id is None:
             return
-        bar_date = self.schedule.most_recent_bar_date(now)
+        bar_date = self.schedule.poll_bar_date(now)
         await asyncio.to_thread(
             self.db.record_poll_message, bar_date, message_id, channel_id, mode
         )
@@ -121,7 +121,7 @@ class TorsdagsbarModule:
 
     async def on_button_vote(self, user_id: int, option_key: str, now: datetime) -> None:
         """En bruger trykkede på en knap i afstemningen."""
-        bar_date = self.schedule.most_recent_bar_date(now)
+        bar_date = self.schedule.poll_bar_date(now)
         await asyncio.to_thread(
             self.db.upsert_vote, bar_date, user_id, option_key, "buttons"
         )
@@ -135,17 +135,33 @@ class TorsdagsbarModule:
         if not self.vote_options:
             return
         now = self.tracker.now()
-        bar_date = self.schedule.most_recent_bar_date(now)
-        if now > self.schedule.summary_time_of(bar_date):
-            return
         if (
             self._last_vote_sync is not None
             and (now - self._last_vote_sync).total_seconds() < self.config.vote_sync_seconds
         ):
             return
 
-        poll_ref = await asyncio.to_thread(self.db.get_poll_message, bar_date.isoformat())
-        if poll_ref is None:
+        # Først den bar, afstemningen handler om. Er der endnu ikke sendt en
+        # afstemning for den, synkroniseres den forrige bar videre, indtil dens
+        # opsummering er skrevet – ellers ville sene stemmeskift gå tabt i
+        # timerne mellem baren lukker og opsummeringen sendes.
+        kandidater = [self.schedule.poll_bar_date(now)]
+        tidligere = self.schedule.most_recent_bar_date(now)
+        if tidligere not in kandidater:
+            kandidater.append(tidligere)
+
+        bar_date = None
+        poll_ref = None
+        for kandidat in kandidater:
+            if now > self.schedule.summary_time_of(kandidat):
+                continue
+            poll_ref = await asyncio.to_thread(
+                self.db.get_poll_message, kandidat.isoformat()
+            )
+            if poll_ref is not None:
+                bar_date = kandidat
+                break
+        if poll_ref is None or bar_date is None:
             return
         self._last_vote_sync = now
         if poll_ref.get("mode") != "native":

@@ -374,7 +374,7 @@ Alt sættes i `.env` (eller `config.json`, undtagen tokenet).
 | `CHANNEL_ID` | – | **Påkrævet.** Kanalen afstemningen sendes i. |
 | `OWNER_ID` | – | Den eneste bruger der må køre `/testvote`. |
 | `GUILD_ID` | tom | Server-ID. Gør `/testvote` synlig med det samme. |
-| `POLL_WEEKDAY` | `3` | 0 = mandag … 3 = torsdag … 6 = søndag. |
+| `POLL_WEEKDAY` | `3` | 0 = mandag … 3 = torsdag … 6 = søndag. Afstemningen behøver ikke ligge på selve bar-dagen: stemmerne knyttes altid til den **kommende** torsdagsbar. |
 | `POLL_HOUR` | `15` | Time (0–23). |
 | `POLL_MINUTE` | `0` | Minut (0–59). |
 | `TIMEZONE` | `Europe/Copenhagen` | Tidszone. |
@@ -599,8 +599,8 @@ Hver fredag kl. 12:00 sender botten en opsummering af torsdagens bar: hvem der d
 |---|---|
 | 👑 **Aftenens konge** | Længst **optjent** tid den aften (dvs. kun tid med selskab, hvis `require_company` er slået til). Optjener flere præcis lige meget, vinder den, der faktisk sad længst i baren — er begge dele lige, deles titlen. |
 | 🏃 **Marathonmand** | Alle med **mere end 5 timer** samme aften. |
-| 🐦 **Early Bird** | Først online. |
-| 🦉 **Lukkede baren** | Sidst online — seneste registrerede sluttidspunkt. |
+| 🐦 **Early Bird** | Først online. De, der allerede sad i kanalen, da baren åbnede, får alle registreringens starttidspunkt og deler derfor titlen — teksten siger så "sad der allerede, da baren åbnede". Deler **samtlige** deltagere den, siger den ingenting, og titlen udelades. |
+| 🦉 **Lukkede baren** | Sidst online — seneste registrerede sluttidspunkt. Samme regel som 🐦: alle, der stadig sad der kl. 03:00, deler titlen, og den udelades hvis det gælder alle. |
 | 🎯 **Holdt hvad du lovede** | Kom online inden for det tidsrum, de stemte på. |
 | 🎭 **Surprise!** | Stemte "Jeg kommer ikke", men dukkede alligevel op. |
 | ⚡ **Speedrun** | Aftenens korteste gyldige besøg — mindst **10 minutter**, så korte forbindelsesfejl ikke tæller. |

@@ -308,6 +308,15 @@ class Engine:
         """
         return dict(self.night_user_present.get(bar_date, {}))
 
+    def night_total(self, bar_date: str, user_id: int) -> int:
+        """Brugerens optjente nat-total inkl. eventuelle rettelser.
+
+        Det er præcis det tal, statistikken viser – i modsætning til summen af
+        rå sessionsvarigheder, som hverken tager højde for selskabskravet eller
+        for overlappende sessioner.
+        """
+        return self.night_user.get(bar_date, {}).get(user_id, 0)
+
     def night_alone(self, bar_date: str) -> dict[int, int]:
         """Tid i baren UDEN selskab pr. bruger den aften ("ventetid").
 

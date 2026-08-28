@@ -379,14 +379,12 @@ def build_group(module) -> app_commands.Group:
             )
             besked = f"✅ Tilføjede {minutter} minutter til {bruger.display_name} den {dato}."
         else:  # sæt samlet tid
-            # Beregn nuværende total (sessioner + eksisterende rettelser) og lav
-            # en delta, så totalen rammer det ønskede.
-            sessions = await asyncio.to_thread(
-                module.db.load_sessions, d.isoformat(), d.isoformat(), bruger.id, False
-            )
-            auto = sum(int(s.duration_seconds or 0) for s in sessions)
-            corr = await asyncio.to_thread(module.db.correction_total, bruger.id, d.isoformat())
-            current = auto + corr
+            # Nuværende total SKAL læses fra motoren, ikke som summen af rå
+            # sessionsvarigheder: med selskabskravet tæller kun tid med andre,
+            # og overlappende sessioner må ikke tælles dobbelt. Motorens tal
+            # indeholder allerede eksisterende rettelser.
+            engine = await module.build_engine()
+            current = engine.night_total(d.isoformat(), bruger.id)
             target = int(minutter) * 60
             delta = target - current
             await asyncio.to_thread(
