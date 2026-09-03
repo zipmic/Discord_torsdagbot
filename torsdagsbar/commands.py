@@ -205,22 +205,16 @@ def build_group(module) -> app_commands.Group:
         await interaction.followup.send(embed=embed)
 
     # ------------------------------------------------------------ leaderboard
-    @group.command(name="leaderboard", description="Vis ranglisten over deltagelse.")
-    @app_commands.describe(
-        sortering="Hvad skal der sorteres efter?",
-        periode="Hvilken periode? (standard: i år)",
-        år="Et bestemt kalenderår, fx 2025 (overtrumfer periode)",
-    )
-    @app_commands.choices(sortering=SORT_CHOICES, periode=PERIODE_CHOICES)
-    async def leaderboard_cmd(
+    async def _vis_leaderboard(
         interaction: discord.Interaction,
-        sortering: Optional[app_commands.Choice[str]] = None,
-        periode: Optional[app_commands.Choice[str]] = None,
-        år: Optional[app_commands.Range[int, MIN_ÅR, 2100]] = None,
+        standard_sort: str,
+        sortering: Optional[app_commands.Choice[str]],
+        periode: Optional[app_commands.Choice[str]],
+        år: Optional[int],
     ) -> None:
         await interaction.response.defer(thinking=True)
-        sort_key = sortering.value if sortering else "tid"
-        sort_label = sortering.name if sortering else SORT_KEYS["tid"]
+        sort_key = sortering.value if sortering else standard_sort
+        sort_label = sortering.name if sortering else SORT_KEYS[standard_sort]
         start, end, label = _periode_og_år(module, periode, år)
         engine = await module.build_engine()
         rows = engine.leaderboard(sort_key, start, end, limit=None)
@@ -233,6 +227,43 @@ def build_group(module) -> app_commands.Group:
             per_page,
         )
         await send_paginated(interaction, view)
+
+    @group.command(
+        name="leaderboard",
+        description="Vis ranglisten efter gennemsnitstid pr. torsdagsbar.",
+    )
+    @app_commands.describe(
+        sortering="Hvad skal der sorteres efter? (standard: gennemsnitlig tid)",
+        periode="Hvilken periode? (standard: i år)",
+        år="Et bestemt kalenderår, fx 2025 (overtrumfer periode)",
+    )
+    @app_commands.choices(sortering=SORT_CHOICES, periode=PERIODE_CHOICES)
+    async def leaderboard_cmd(
+        interaction: discord.Interaction,
+        sortering: Optional[app_commands.Choice[str]] = None,
+        periode: Optional[app_commands.Choice[str]] = None,
+        år: Optional[app_commands.Range[int, MIN_ÅR, 2100]] = None,
+    ) -> None:
+        await _vis_leaderboard(interaction, "gennemsnit", sortering, periode, år)
+
+    # -------------------------------------------------------------- totaltid
+    @group.command(
+        name="totaltid",
+        description="Vis ranglisten efter samlet deltagelsestid.",
+    )
+    @app_commands.describe(
+        sortering="Hvad skal der sorteres efter? (standard: samlet tid)",
+        periode="Hvilken periode? (standard: i år)",
+        år="Et bestemt kalenderår, fx 2025 (overtrumfer periode)",
+    )
+    @app_commands.choices(sortering=SORT_CHOICES, periode=PERIODE_CHOICES)
+    async def totaltid_cmd(
+        interaction: discord.Interaction,
+        sortering: Optional[app_commands.Choice[str]] = None,
+        periode: Optional[app_commands.Choice[str]] = None,
+        år: Optional[app_commands.Range[int, MIN_ÅR, 2100]] = None,
+    ) -> None:
+        await _vis_leaderboard(interaction, "tid", sortering, periode, år)
 
     # ----------------------------------------------------------------- profil
     @group.command(name="profil", description="Vis ét samlet profilkort for dig selv eller en anden.")
