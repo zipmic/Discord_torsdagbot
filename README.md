@@ -556,7 +556,8 @@ Alle svar vises i pæne embeds. `bruger`, `periode` og `år` kan udelades.
 | `/torsdagsbar stats [bruger] [periode] [år]` | Statistik: samlet tid, antal torsdagsbarer, gennemsnit, længste enkeltdeltagelse, streak, placering + top 10. |
 | `/torsdagsbar streak [bruger]` | Nuværende og længste streak + top 10 aktive streaks. |
 | `/torsdagsbar rekorder [periode] [år]` | Flest deltagere, længste individuelle deltagelse, længste aften, længste streaks, flest torsdagsbarer/timer. |
-| `/torsdagsbar leaderboard [sortering] [periode] [år]` | Rangliste med blader-knapper. Sortér efter tid, antal, gennemsnit, streak, længste streak eller længste enkeltdeltagelse. |
+| `/torsdagsbar leaderboard [sortering] [periode] [år]` | Rangliste med blader-knapper. **Sorterer efter gennemsnitstid pr. torsdagsbar** som standard. Kan også sortere efter tid, antal, streak, længste streak eller længste enkeltdeltagelse. |
+| `/torsdagsbar totaltid [sortering] [periode] [år]` | Samme rangliste, men sorteret efter **samlet deltagelsestid** som standard. |
 | `/torsdagsbar live` | Hvem der sidder i baren lige nu, hvor længe, samlet tid, og hvor længe der er tilbage. |
 | `/quote add bruger:@X tekst:"..."` | Gem et citat på en bruger. |
 | `/quote random` | Vis et tilfældigt citat fra hele citat-bogen. |
