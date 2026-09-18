@@ -45,7 +45,7 @@ class NightAwards:
     marathon: list[tuple[int, int]] = field(default_factory=list)  # 🏃 (uid, sek)
     early_birds: list[int] = field(default_factory=list)       # 🐦
     early_bird_at: Optional[datetime] = None
-    closers: list[int] = field(default_factory=list)           # 🦉
+    closers: list[int] = field(default_factory=list)           # 🦉 de sidste to offline
     closer_at: Optional[datetime] = None
     kept_promise: list[int] = field(default_factory=list)      # 🎯
     surprises: list[int] = field(default_factory=list)         # 🎭
@@ -108,11 +108,22 @@ def _earliest(moments: dict[int, datetime]) -> tuple[list[int], Optional[datetim
     return sorted(uid for uid, m in moments.items() if m == best), best
 
 
-def _latest(moments: dict[int, datetime]) -> tuple[list[int], Optional[datetime]]:
+def _latest_n(
+    moments: dict[int, datetime], n: int
+) -> tuple[list[int], Optional[datetime]]:
+    """De brugere med de *n* seneste tidspunkter (delt ved lige tid).
+
+    Bruges til 🦉 "Lukkede baren": ikke kun den allersidste, men de sidste *n*
+    der går offline. Der vælges de n seneste *tidspunkter* — er der uafgjort på
+    et af dem, kommer alle med, så listen kan blive længere end n. Andet element
+    er det allerseneste tidspunkt (til visning af lukketid).
+    """
     if not moments:
         return [], None
-    best = max(moments.values())
-    return sorted(uid for uid, m in moments.items() if m == best), best
+    distinct = sorted(set(moments.values()), reverse=True)
+    threshold = distinct[min(n, len(distinct)) - 1]
+    holders = sorted(uid for uid, m in moments.items() if m >= threshold)
+    return holders, distinct[0]
 
 
 def compute_night_awards(
@@ -153,9 +164,9 @@ def compute_night_awards(
         key=lambda kv: -kv[1],
     )
 
-    # 🐦 Early Bird / 🦉 Lukkede baren
+    # 🐦 Early Bird / 🦉 Lukkede baren (de sidste to der går offline)
     awards.early_birds, awards.early_bird_at = _earliest(arrivals)
-    awards.closers, awards.closer_at = _latest(departures)
+    awards.closers, awards.closer_at = _latest_n(departures, 2)
 
     # ⚡ Speedrun – korteste gyldige besøg (mindst 10 min).
     speedrun_candidates = {

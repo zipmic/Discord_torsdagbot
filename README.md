@@ -558,6 +558,7 @@ Alle svar vises i pæne embeds. `bruger`, `periode` og `år` kan udelades.
 | `/torsdagsbar rekorder [periode] [år]` | Flest deltagere, længste individuelle deltagelse, længste aften, længste streaks, flest torsdagsbarer/timer. |
 | `/torsdagsbar leaderboard [sortering] [periode] [år]` | Rangliste med blader-knapper. **Sorterer efter gennemsnitstid pr. torsdagsbar** som standard. Kan også sortere efter tid, antal, streak, længste streak eller længste enkeltdeltagelse. |
 | `/torsdagsbar totaltid [sortering] [periode] [år]` | Samme rangliste, men sorteret efter **samlet deltagelsestid** som standard. |
+| `/torsdagsbar aftener [periode] [år]` | Rangliste over **torsdagsbarerne** med mest samlet deltagertid — hvilken aften havde flest timer på tværs af deltagerne. |
 | `/torsdagsbar live` | Hvem der sidder i baren lige nu, hvor længe, samlet tid, og hvor længe der er tilbage. |
 | `/quote add bruger:@X tekst:"..."` | Gem et citat på en bruger. |
 | `/quote random` | Vis et tilfældigt citat fra hele citat-bogen. |
@@ -601,7 +602,7 @@ Hver fredag kl. 12:00 sender botten en opsummering af torsdagens bar: hvem der d
 | 👑 **Aftenens konge** | Længst online i alt den aften. Ved præcis lige tid deles titlen. |
 | 🏃 **Marathonmand** | Alle med **mere end 5 timer** samme aften. |
 | 🐦 **Early Bird** | Først online. |
-| 🦉 **Lukkede baren** | Sidst online — seneste registrerede sluttidspunkt. |
+| 🦉 **Lukkede baren** | De **sidste to** der går offline. Er der uafgjort på det næstsidste tidspunkt, deles titlen af alle med det tidspunkt. |
 | 🎯 **Holdt hvad du lovede** | Kom online inden for det tidsrum, de stemte på. |
 | 🎭 **Surprise!** | Stemte "Jeg kommer ikke", men dukkede alligevel op. |
 | ⚡ **Speedrun** | Aftenens korteste gyldige besøg — mindst **10 minutter**, så korte forbindelsesfejl ikke tæller. |
