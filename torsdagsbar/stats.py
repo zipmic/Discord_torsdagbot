@@ -159,6 +159,16 @@ class LeaderboardRow:
 
 
 @dataclass
+class NightBoardRow:
+    """Én torsdagsbar i nat-ranglisten (sorteret efter samlet deltagertid)."""
+    bar_date: str
+    total_seconds: int = 0
+    participant_count: int = 0
+    top_user: Optional[int] = None
+    top_seconds: int = 0
+
+
+@dataclass
 class NightSummary:
     bar_date: str
     cancelled: bool
@@ -487,6 +497,39 @@ class Engine:
                 r.value_seconds = r.longest_single_seconds
             else:
                 r.value_seconds = r.total_seconds
+        return rows if limit is None else rows[:limit]
+
+    # -- nat-rangliste ------------------------------------------------------
+    def night_leaderboard(
+        self,
+        start: Optional[str] = None,
+        end: Optional[str] = None,
+        limit: Optional[int] = None,
+    ) -> list[NightBoardRow]:
+        """Ranglisten over torsdagsbarer efter samlet deltagertid (faldende).
+
+        Kun tællende nætter med mindst én kvalificeret deltager kommer med. Ved
+        lige samlet tid vinder den nyeste dato.
+        """
+        rows: list[NightBoardRow] = []
+        for bar_date in self.dates_in_period(start, end):
+            quals = self._qualifiers(bar_date)
+            if not quals:
+                continue
+            top = sorted(
+                quals.items(), key=lambda kv: (-kv[1], self.name(kv[0]).lower())
+            )[0]
+            rows.append(
+                NightBoardRow(
+                    bar_date=bar_date,
+                    total_seconds=sum(quals.values()),
+                    participant_count=len(quals),
+                    top_user=top[0],
+                    top_seconds=top[1],
+                )
+            )
+        # Samlet tid faldende; ved lige tid nyeste dato først (ISO sorterer korrekt).
+        rows.sort(key=lambda r: (r.total_seconds, r.bar_date), reverse=True)
         return rows if limit is None else rows[:limit]
 
     # -- én bestemt nat (til opsummering) ----------------------------------

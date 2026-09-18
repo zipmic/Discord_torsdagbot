@@ -412,6 +412,36 @@ async def test_streaks_records_leaderboard_cancel_corrections():
         db.close()
 
 
+async def test_night_leaderboard():
+    print("\n== Nat-rangliste efter samlet deltagertid ==")
+    with tempfile.TemporaryDirectory() as d:
+        dbpath = Path(d) / "t.db"
+        cfg = make_config(dbpath, require_company=False)
+        db = Database(dbpath)
+
+        def manual(uid, name, day, hours):
+            j = datetime(2026, 5, day, 17, 0, tzinfo=timezone.utc)
+            l = j + timedelta(hours=hours)
+            db.add_manual_session(uid, name, date(2026, 5, day), j, l)
+
+        # 14/5: 2t + 3t = 5t samlet. 7/5: 2t + 1.5t = 3.5t. 28/5: kun 4t (1 deltager).
+        manual(1, "Christian", 7, 2);  manual(2, "Emil", 7, 1.5)
+        manual(1, "Christian", 14, 2); manual(2, "Emil", 14, 3)
+        manual(1, "Christian", 28, 4)
+
+        eng = Engine(db.load_sessions(), db.load_nights(), db.load_corrections(),
+                     cfg.min_seconds, require_company=cfg.require_company)
+        board = eng.night_leaderboard()
+        check("tre tællende nætter", len(board) == 3)
+        check("nr1 = 14/5 (5t samlet)", board[0].bar_date == "2026-05-14")
+        check("nr1 samlet tid = 5t", board[0].total_seconds == 5 * 3600)
+        check("nr1 deltagerantal = 2", board[0].participant_count == 2)
+        check("nr1 topbruger = Emil (3t)", board[0].top_user == 2)
+        check("nr2 = 28/5 (4t)", board[1].bar_date == "2026-05-28")
+        check("nr3 = 7/5 (3.5t)", board[2].bar_date == "2026-05-07")
+        db.close()
+
+
 async def test_leaderboard_command_send():
     print("\n== /leaderboard-kommandoen sender uden at crashe (én og flere sider) ==")
     from torsdagsbar.module import TorsdagsbarModule
@@ -579,6 +609,7 @@ async def main():
     await test_live_status()
     await test_summary_once()
     await test_streaks_records_leaderboard_cancel_corrections()
+    await test_night_leaderboard()
     await test_leaderboard_command_send()
     await test_live_counts_in_leaderboard()
     await test_company_gating()

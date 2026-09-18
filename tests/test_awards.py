@@ -119,8 +119,18 @@ def test_early_bird_and_closer():
     _, a = awards_for(b, {})
     check("early bird = B (19:05)", a.early_birds == [2])
     check("early bird-tidspunkt", a.early_bird_at.astimezone(TZ).strftime("%H:%M") == "19:05")
-    check("lukkede baren = C (02:35)", a.closers == [3])
-    check("lukketidspunkt", a.closer_at.astimezone(TZ).strftime("%H:%M") == "02:35")
+    # 🦉 gives til de sidste TO der går offline: C (02:35) og A (22:00).
+    check("lukkede baren = A og C (de sidste to)", a.closers == [1, 3])
+    check("lukketidspunkt = seneste afgang", a.closer_at.astimezone(TZ).strftime("%H:%M") == "02:35")
+
+    # Uafgjort på næstsidste tidspunkt: alle med det tidspunkt kommer med.
+    b2 = (NightBuilder()
+          .add(1, "A", 19, 0, 2, 0, next_day=True)   # sidst ude 02:00
+          .add(2, "B", 19, 0, 1, 0, next_day=True)   # næstsidst 01:00
+          .add(3, "C", 19, 0, 1, 0, next_day=True)   # uafgjort 01:00
+          .add(4, "D", 19, 0, 23, 0))                # tidligst ude 23:00
+    _, a2 = awards_for(b2, {})
+    check("lukkede baren ved uafgjort = A, B, C", a2.closers == [1, 2, 3])
 
 
 def test_kept_promise():

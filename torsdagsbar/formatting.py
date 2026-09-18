@@ -12,7 +12,7 @@ import discord
 from zoneinfo import ZoneInfo
 
 from .awards import AwardTally, Badge, NightAwards
-from .stats import Engine, LeaderboardRow, NightSummary, UserStats
+from .stats import Engine, LeaderboardRow, NightBoardRow, NightSummary, UserStats
 
 # Navneopslag: giver et brugervenligt navn ud fra et bruger-ID.
 NameResolver = Callable[[int], str]
@@ -256,6 +256,45 @@ def leaderboard_embed(
         if sort_key not in ("antal",) and row.nights:
             ekstra += f" · {fmt_duration(row.total_seconds, kort=True)} i alt"
         linjer.append(f"**{plads}.** {name_of(row.user_id)} — {værdi}{ekstra}")
+    embed.description = "\n".join(linjer)
+    embed.set_footer(text=f"Torsdagsbar · Periode: {periode_label} · Side {page + 1}/{pages}")
+    return embed
+
+
+def night_leaderboard_embed(
+    rows: list[NightBoardRow],
+    name_of: NameResolver,
+    periode_label: str,
+    page: int,
+    pages: int,
+    per_page: int,
+) -> discord.Embed:
+    """Rangliste over torsdagsbarer med mest samlet deltagertid."""
+    embed = discord.Embed(
+        title="🍻 Torsdagsbarer — mest samlet tid",
+        colour=FARVE,
+    )
+    if not rows:
+        embed.description = "Ingen torsdagsbarer registreret i den valgte periode."
+        _footer(embed, periode_label)
+        return embed
+
+    start = page * per_page
+    linjer = []
+    for offset, row in enumerate(rows[start : start + per_page]):
+        plads = start + offset + 1
+        dag = fmt_date(date.fromisoformat(row.bar_date))
+        deltal = "deltager" if row.participant_count == 1 else "deltagere"
+        linje = (
+            f"**{plads}.** {dag} — {fmt_duration(row.total_seconds)}"
+            f" · {row.participant_count} {deltal}"
+        )
+        if row.top_user is not None:
+            linje += (
+                f" · 👑 {name_of(row.top_user)}"
+                f" ({fmt_duration(row.top_seconds, kort=True)})"
+            )
+        linjer.append(linje)
     embed.description = "\n".join(linjer)
     embed.set_footer(text=f"Torsdagsbar · Periode: {periode_label} · Side {page + 1}/{pages}")
     return embed

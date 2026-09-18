@@ -265,6 +265,35 @@ def build_group(module) -> app_commands.Group:
     ) -> None:
         await _vis_leaderboard(interaction, "tid", sortering, periode, år)
 
+    # --------------------------------------------------------------- aftener
+    @group.command(
+        name="aftener",
+        description="Rangliste over torsdagsbarer med mest samlet deltagertid.",
+    )
+    @app_commands.describe(
+        periode="Hvilken periode? (standard: i år)",
+        år="Et bestemt kalenderår, fx 2025 (overtrumfer periode)",
+    )
+    @app_commands.choices(periode=PERIODE_CHOICES)
+    async def aftener_cmd(
+        interaction: discord.Interaction,
+        periode: Optional[app_commands.Choice[str]] = None,
+        år: Optional[app_commands.Range[int, MIN_ÅR, 2100]] = None,
+    ) -> None:
+        await interaction.response.defer(thinking=True)
+        start, end, label = _periode_og_år(module, periode, år)
+        engine = await module.build_engine()
+        rows = engine.night_leaderboard(start, end, limit=None)
+        per_page = module.config.leaderboard_size
+        view = PaginatedEmbedView(
+            lambda page, pages: fmt.night_leaderboard_embed(
+                rows, module.name_of, label, page, pages, per_page
+            ),
+            len(rows),
+            per_page,
+        )
+        await send_paginated(interaction, view)
+
     # ----------------------------------------------------------------- profil
     @group.command(name="profil", description="Vis ét samlet profilkort for dig selv eller en anden.")
     @app_commands.describe(
