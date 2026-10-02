@@ -176,7 +176,7 @@ def compute_night_awards(
     # tid, selv om den ene sad flere timer længere i baren. Derfor brydes
     # uafgjort på den rå tid i baren, så kronen kun deles, når begge dele er
     # lige. Optjent tid er stadig det primære mål, så man kan ikke vinde
-    # kronen på tid, man sad alene.
+    # kronen på tid, man sad alene før barens officielle åbning.
     awards.kings, awards.king_seconds = _max_holders(qualified)
     if awards.king_seconds <= 0:
         awards.kings = []          # ingen optjent tid = ingen konge
@@ -254,16 +254,17 @@ def compute_night_awards(
         if arrival is None or option.promise_start is None:
             continue
 
-        start, end = promise_window(option, day, schedule.tz, window_start)
+        _, end = promise_window(option, day, schedule.tz, window_start)
 
-        # 🎯 Holdt hvad du lovede – inden for det lovede tidsrum. Et åbent løfte
-        # ("efter 21:00") holdes ved at møde op efter starttidspunktet.
+        # 🎯 Holdt hvad du lovede – senest ved løftets slut. At komme FØR tid er
+        # aldrig et brudt løfte: lovede man 20:00–20:30 og kom 19:59, holdt man
+        # det. Et åbent løfte ("efter 21:00") holdes derfor altid, når man
+        # dukker op – det kan man hverken komme for sent eller for tidligt til.
         if end is None:
-            if arrival >= start:
-                awards.kept_promise.append(uid)
-            continue  # åbne løfter kan ikke komme for sent
+            awards.kept_promise.append(uid)
+            continue
 
-        if start <= arrival <= end:
+        if arrival <= end:
             awards.kept_promise.append(uid)
             continue
 

@@ -193,6 +193,8 @@ def load_torsdagsbar_config(
         summary_weekday=geti("summary_weekday", "TB_SUMMARY_WEEKDAY", 4),
         summary_hour=geti("summary_hour", "TB_SUMMARY_HOUR", 12),
         summary_minute=geti("summary_minute", "TB_SUMMARY_MINUTE", 0),
+        open_hour=geti("open_hour", "TB_OPEN_HOUR", 20),
+        open_minute=geti("open_minute", "TB_OPEN_MINUTE", 0),
     )
 
     min_minutes = geti("min_minutes", "TB_MIN_MINUTES", 5)

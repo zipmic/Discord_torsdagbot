@@ -41,6 +41,8 @@
     "summary_show_records": true,
     "start_hour": 19,
     "start_minute": 0,
+    "open_hour": 20,
+    "open_minute": 0,
     "end_hour": 3,
     "end_minute": 0,
     "summary_weekday": 4,

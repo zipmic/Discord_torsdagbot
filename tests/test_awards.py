@@ -72,13 +72,15 @@ class NightBuilder:
         return self
 
     def engine(self, min_minutes=5, cancelled=False, extra_sessions=None,
-               require_company=False):
+               require_company=False, open_bar=False):
         nights = {self.bar_date: Night(self.bar_date, cancelled, False, None, None)}
         sessions = self.sessions + list(extra_sessions or [])
         for s in sessions:
             nights.setdefault(s.bar_date, Night(s.bar_date, False, False, None, None))
+        # open_bar=True: barens officielle åbning kl. 20:00 gælder (som i botten).
+        open_of = (lambda d: SCHEDULE.open_of(date.fromisoformat(d))) if open_bar else None
         return Engine(sessions, nights, [], min_minutes * 60,
-                      require_company=require_company)
+                      require_company=require_company, open_of=open_of)
 
 
 def awards_for(builder, votes, rules=AwardRules(), **kw):
@@ -295,19 +297,40 @@ def test_early_bird_shared_by_everyone():
           "allerede" in felter["🐦 Early Bird"])
 
 
+def test_early_bird_alone_before_opening():
+    print("\n== 🐦 Early Bird for at sidde alene før 20:00 ==")
+    # A sidder alene fra 19:10; B kommer først 20:30. A's tid før 20:00 tæller
+    # ikke (intet selskab), men A var den første og får stadig Early Bird.
+    b = (NightBuilder()
+         .add(1, "A", 19, 10, 22, 0)
+         .add(2, "B", 20, 30, 22, 0))
+    eng, a = awards_for(b, {}, require_company=True, open_bar=True)
+    check("A optjener 20:00-22:00 = 2t (alene 19:10-20:00 tæller ikke)",
+          eng.qualifiers(BD).get(1) == 2 * 3600)
+    check("A er Early Bird (19:10)", a.early_birds == [1])
+    check("Early Bird-tidspunkt 19:10", a.early_bird_at.astimezone(TZ).strftime("%H:%M") == "19:10")
+    check("A's ventetid tæller hele tiden alene (19:10-20:30)",
+          eng.night_alone(BD).get(1) == 80 * 60)
+
+
 def test_kept_promise():
     print("\n== 🎯 Holdt hvad du lovede ==")
     b = (NightBuilder()
          .add(1, "A", 20, 17, 23, 0)   # stemte 20:00-20:30 -> holdt
          .add(2, "B", 21, 30, 23, 0)   # stemte efter 21:00 -> holdt (åbent løfte)
          .add(3, "C", 20, 45, 23, 0)   # stemte 20:00-20:30 -> for sent
-         .add(4, "D", 21, 0, 23, 0))   # stemte efter 22:00, men kom 21:00 -> ikke holdt
-    votes = {1: "t2000", 2: "e2100", 3: "t2000", 4: "e2200"}
+         .add(4, "D", 21, 0, 23, 0)    # stemte efter 22:00, men kom 21:00 -> holdt (før tid)
+         .add(5, "E", 19, 59, 23, 0)   # stemte 20:00-20:30, kom 19:59 -> holdt (før tid)
+         .add(6, "F", 20, 30, 23, 0))  # stemte 20:00-20:30, kom præcis 20:30 -> holdt
+    votes = {1: "t2000", 2: "e2100", 3: "t2000", 4: "e2200", 5: "t2000", 6: "t2000"}
     _, a = awards_for(b, votes)
     check("A holdt (20:17 i 20:00-20:30)", 1 in a.kept_promise)
     check("B holdt (åbent løfte, kom efter 21)", 2 in a.kept_promise)
     check("C holdt IKKE (kom 20:45)", 3 not in a.kept_promise)
-    check("D holdt IKKE (kom før sit løfte)", 4 not in a.kept_promise)
+    check("D holdt (åbent løfte, at komme før tid tæller)", 4 in a.kept_promise)
+    check("E holdt (kom 19:59 til 20:00-20:30 – før tid er ikke for sent)", 5 in a.kept_promise)
+    check("E er ikke slow starter", all(uid != 5 for uid, _ in a.slow_starters))
+    check("F holdt (præcis ved løftets slut)", 6 in a.kept_promise)
 
 
 def test_surprise():
@@ -762,6 +785,7 @@ async def main():
     test_king_with_company_rule()
     test_waiting_for_players()
     test_early_bird_and_closer()
+    test_early_bird_alone_before_opening()
     test_early_bird_shared_by_everyone()
     test_kept_promise()
     test_surprise()

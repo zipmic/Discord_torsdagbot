@@ -251,7 +251,15 @@ class TorsdagsbarModule:
             corrections,
             self.config.min_seconds,
             require_company=self.config.require_company,
+            open_of=self._open_of,
         )
+
+    def _open_of(self, bar_date: str) -> Optional[datetime]:
+        """Barens officielle åbning for en torsdagsbar (til Engine)."""
+        try:
+            return self.schedule.open_of(date.fromisoformat(bar_date))
+        except ValueError:
+            return None
 
     # -- navneopslag --------------------------------------------------------
     def name_of(self, user_id: int) -> str:

@@ -395,7 +395,8 @@ Alt sættes i `.env` (eller `config.json`, undtagen tokenet).
 |---|---|---|
 | `server_id`, `voice_channel_ids`, `summary_channel_id` | – | **Påkrævet** for at slå torsdagsbaren til. |
 | `min_minutes` | `5` | Mindste deltagelse for at tælle med. |
-| `require_company` | `true` | Optjen kun tid, mens der er andre til stede. |
+| `require_company` | `true` | Før barens officielle åbning optjenes kun tid, mens der er andre til stede. |
+| `open_hour`, `open_minute` | `20`, `0` | Barens officielle åbning. Herfra tæller al tid — også alene. |
 | `late_enabled` | `true` | Send "du er sent på den"-beskeder. |
 | `late_channel_id` | tom | Kanal til forsinkelser (tom = opsummeringskanalen). |
 | `late_grace_minutes` | `90` | Hvor sent en forsinkelsesbesked stadig må sendes. |
@@ -599,11 +600,11 @@ Hver fredag kl. 12:00 sender botten en opsummering af torsdagens bar: hvem der d
 
 | Titel | Hvem får den |
 |---|---|
-| 👑 **Aftenens konge** | Længst **optjent** tid den aften (dvs. kun tid med selskab, hvis `require_company` er slået til). Optjener flere præcis lige meget, vinder den, der faktisk sad længst i baren — er begge dele lige, deles titlen. |
+| 👑 **Aftenens konge** | Længst **optjent** tid den aften (før kl. 20:00 kun tid med selskab, hvis `require_company` er slået til). Optjener flere præcis lige meget, vinder den, der faktisk sad længst i baren — er begge dele lige, deles titlen. |
 | 🏃 **Marathonmand** | Alle med **mere end 5 timer** samme aften. |
 | 🐦 **Early Bird** | Først online. De, der allerede sad i kanalen, da baren åbnede, får alle registreringens starttidspunkt og deler derfor titlen — teksten siger så "sad der allerede, da baren åbnede". Deler **samtlige** deltagere den, siger den ingenting, og titlen udelades. |
 | 🦉 **Lukkede baren** | De **sidste to** der går offline, hver med sit eget afgangstidspunkt. Er der uafgjort på det næstsidste tidspunkt, deles titlen af alle med det tidspunkt. Var der kun to deltagere, får begge den; deler tre eller flere den (fx alle sad der til kl. 03:00), udelades den. |
-| 🎯 **Holdt hvad du lovede** | Kom online inden for det tidsrum, de stemte på. |
+| 🎯 **Holdt hvad du lovede** | Kom online **senest** ved slutningen af det tidsrum, de stemte på. At komme før tid tæller også som holdt (lovede man 20:00–20:30 og kom 19:59, holdt man det). Et åbent løfte ("efter 21:00") holdes altid, når man dukker op. |
 | 🎭 **Surprise!** | Stemte "Jeg kommer ikke", men dukkede alligevel op. |
 | ⚡ **Speedrun** | Aftenens korteste gyldige besøg — mindst **10 minutter**, så korte forbindelsesfejl ikke tæller. |
 | ⏳ **Waiting for players...** | Sad længst i baren **uden selskab** — og hvor længe. Kræver mindst **15 minutter** alene. Her tæller **alle**, der var i baren, ikke kun dem der kvalificerede sig: den, der sad helt alene, optjener jo netop ingen tid. |
@@ -663,7 +664,8 @@ De stemmeafhængige funktioner (🎯, 🤥, 🐌, 🎭 og "du er sent på den") 
 ### Sådan virker registreringen og databasen
 
 - Når en rigtig bruger tilslutter sig en registreret voicekanal **inden for vinduet**, åbnes en *session*. Når de går, lukkes den, og varigheden gemmes. Kommer de tilbage, lægges tiderne sammen.
-- **Man optjener kun tid, mens der er selskab** — altså kun i de øjeblikke, hvor mindst én **anden** rigtig bruger også er i baren samtidig. Sidder man helt alene, tælles den tid ikke (så man ikke bare kan joine og "farme" point). Reglen kan slås fra med `require_company: false`. Fordi tiden altid **genberegnes ud fra sessionerne**, gælder reglen også **bagud i historikken** — gammel solo-tid falder automatisk væk, uden nogen migrering.
+- **Baren åbner officielt kl. 20:00.** Fra da af tæller al tid — også hvis man sidder alene og venter på de andre.
+- **Mellem 19:00 og 20:00 tæller tiden kun med selskab** — altså kun i de øjeblikke, hvor mindst én **anden** rigtig bruger også er i baren samtidig. Er I to, der "åbner baren" før 20:00, tæller den tid med; sidder man alene før 20:00, tæller den ikke (men man kan stadig blive 🐦 Early Bird). Åbningstiden sættes med `open_hour`/`open_minute`, og selskabskravet kan slås helt fra med `require_company: false`. Fordi tiden altid **genberegnes ud fra sessionerne**, gælder reglerne også **bagud i historikken** — uden nogen migrering.
 - **Skift mellem to registrerede kanaler** tæller ikke som at forlade baren. (Bemærk: "selskab" måles på tværs af alle de registrerede voicekanaler — er I i hver jeres kanal, tæller det stadig som selskab.)
 - Sad man der allerede **kl. 19:00**, tælles fra 19:00. Sidder man der stadig **kl. 03:00**, afsluttes automatisk kl. 03:00.
 - Ved **genstart** genoptages åbne sessioner for dem, der stadig sidder i kanalerne; sessioner for dem, der er gået, lukkes ved bottens sidste livstegn – så en hel aften går ikke tabt.

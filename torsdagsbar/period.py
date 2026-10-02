@@ -42,6 +42,10 @@ class Schedule:
     summary_weekday: int = 4  # fredag
     summary_hour: int = 12
     summary_minute: int = 0
+    # Barens officielle åbning: herfra tæller tid, også når man sidder alene.
+    # Mellem registreringens start og åbning kræves selskab (mindst to).
+    open_hour: int = 20
+    open_minute: int = 0
 
     # ---- grundlæggende byggeklodser --------------------------------------
     def start_of(self, bar_date: date) -> datetime:
@@ -57,6 +61,19 @@ class Schedule:
             dt_time(self.end_hour, self.end_minute),
             tzinfo=self.tz,
         )
+
+    def open_of(self, bar_date: date) -> datetime:
+        """Barens officielle åbning (lokal, tz-aware) for en torsdagsbar.
+
+        Ligger tidspunktet før registreringens start, tolkes det som efter
+        midnat (dagen efter) – samme regel som for afstemningens løfter.
+        """
+        moment = datetime.combine(
+            bar_date, dt_time(self.open_hour, self.open_minute), tzinfo=self.tz
+        )
+        if moment < self.start_of(bar_date):
+            moment += timedelta(days=1)
+        return moment
 
     def window_of(self, bar_date: date) -> tuple[datetime, datetime]:
         """(start, slut) som lokale, tz-aware datetimes."""
