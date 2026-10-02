@@ -7,7 +7,9 @@ ud, så den er nem at teste.
 
 Vigtige regler:
   * En brugers "nat-total" = summen af brugerens lukkede sessioner den aften
-    plus eventuelle manuelle rettelser (aldrig under 0).
+    plus eventuelle manuelle rettelser (aldrig under 0). Med selskabskravet
+    tæller tid før barens officielle åbning (20:00) kun med selskab; efter
+    åbning tæller al tid, også alene.
   * En bruger "deltog" en aften, hvis nat-totalen er mindst minimumsgrænsen OG
     natten ikke er aflyst.
   * En "tællende nat" er en ikke-aflyst nat med mindst én kvalificeret deltager.
@@ -19,7 +21,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Callable, Optional
 
 from .database import Correction, Night, Session
 
@@ -43,14 +45,20 @@ def _merge_intervals(
 
 
 def companioned_night(
-    user_intervals: dict[int, list[tuple[datetime, datetime]]]
+    user_intervals: dict[int, list[tuple[datetime, datetime]]],
+    open_at: Optional[datetime] = None,
 ) -> dict[int, tuple[int, int, Optional[datetime], Optional[datetime]]]:
-    """Beregn "tid med selskab" for hver bruger en enkelt aften.
+    """Beregn "tællende tid" for hver bruger en enkelt aften.
 
     En brugers tid tælles kun i de øjeblikke, hvor MINDST ÉN anden rigtig bruger
     også er til stede i baren samtidig. Det udregnes ved at finde de tidsrum,
     hvor mindst to distinkte brugere er til stede (≥2), og skære hver brugers
     tilstedeværelse ned til de tidsrum.
+
+    Med ``open_at`` (barens officielle åbning, fx 20:00) tæller AL tid fra det
+    tidspunkt – også alene. Før åbning gælder selskabskravet stadig, så to der
+    "åbner baren" kl. 19:30, får tiden fra 19:30 med. Uden ``open_at`` er det
+    ren selskabstid (bruges til ⏳ ventetiden).
 
     Input:  {user_id: [(start, slut), ...]}  (tz-aware datetimes)
     Output: {user_id: (total_sek, længste_sammenhængende_sek, start, slut)}
@@ -78,7 +86,15 @@ def companioned_night(
             social.append((social_start, t))
             social_start = None
 
-    # 3) Skær hver brugers tilstedeværelse ned til de "sociale" tidsrum.
+    # 2b) Efter den officielle åbning tæller al tid. Slås sammen med de sociale
+    #     tidsrum, så et selskabsstræk der fortsætter alene efter åbning, er ét
+    #     sammenhængende stræk.
+    if open_at is not None:
+        last_end = max((e for ivs in merged.values() for _, e in ivs), default=None)
+        if last_end is not None and last_end > open_at:
+            social = _merge_intervals(social + [(open_at, last_end)])
+
+    # 3) Skær hver brugers tilstedeværelse ned til de tællende tidsrum.
     result: dict[int, tuple[int, int, Optional[datetime], Optional[datetime]]] = {}
     for uid, ivs in merged.items():
         total = timedelta()
@@ -205,14 +221,18 @@ class Engine:
         corrections: list[Correction],
         min_seconds: int,
         require_company: bool = True,
+        open_of: Optional[Callable[[str], Optional[datetime]]] = None,
     ) -> None:
         self.sessions = [
             s for s in sessions if s.duration_seconds is not None and s.left_at is not None
         ]
         self.nights = nights
         self.min_seconds = max(0, int(min_seconds))
-        # Når True tælles kun tid, hvor mindst én ANDEN bruger var til stede.
+        # Når True tælles kun tid, hvor mindst én ANDEN bruger var til stede –
+        # dog kun indtil barens officielle åbning (``open_of(bar_date)``), hvorefter
+        # al tid tæller, også alene. Uden ``open_of`` gælder kravet hele aftenen.
         self.require_company = require_company
+        self.open_of = open_of
 
         self.cancelled: set[str] = {d for d, n in nights.items() if n.cancelled}
 
@@ -230,29 +250,48 @@ class Engine:
 
         # Nat-totaler {bar_date: {user_id: sekunder}} og længste sammenhængende
         # "med selskab"-stræk {bar_date: {user_id: (sek, start, slut)}}.
+        # Derudover den RÅ tid i baren {bar_date: {user_id: sekunder}}, som er
+        # uafhængig af selskabskravet og bruges til at bryde uafgjorte titler.
         self.night_user: dict[str, dict[int, int]] = {}
         self.night_user_longest: dict[str, dict[int, tuple[int, datetime, datetime]]] = {}
+        self.night_user_present: dict[str, dict[int, int]] = {}
+        self.night_user_alone: dict[str, dict[int, int]] = {}
         for bar_date, users in intervals_by_night.items():
+            merged_by_user = {uid: _merge_intervals(ivs) for uid, ivs in users.items()}
+            presence = {
+                uid: int(sum((e - s).total_seconds() for s, e in merged))
+                for uid, merged in merged_by_user.items()
+            }
+            # Selskabstiden beregnes ALTID – også når selskabskravet er slået
+            # fra – for ventetiden er tid i baren minus tid med selskab.
+            comp = companioned_night(users)
+            with_company = {uid: v[0] for uid, v in comp.items()}
+            alone = {
+                uid: max(0, sec - with_company.get(uid, 0))
+                for uid, sec in presence.items()
+            }
             if self.require_company:
-                comp = companioned_night(users)
-                totals = {uid: v[0] for uid, v in comp.items()}
+                # Optjent tid: selskabstid før åbning + al tid efter åbning.
+                open_at = self.open_of(bar_date) if self.open_of else None
+                earned = comp if open_at is None else companioned_night(users, open_at)
+                totals = {uid: v[0] for uid, v in earned.items()}
                 longest = {
                     uid: (v[1], v[2], v[3])
-                    for uid, v in comp.items()
+                    for uid, v in earned.items()
                     if v[1] > 0 and v[2] is not None and v[3] is not None
                 }
             else:
                 # Uden selskabskrav: rå summer + hele intervaller som "stræk".
-                totals = {}
+                totals = dict(presence)
                 longest = {}
-                for uid, ivs in users.items():
-                    merged = _merge_intervals(ivs)
-                    totals[uid] = int(sum((e - s).total_seconds() for s, e in merged))
+                for uid, merged in merged_by_user.items():
                     if merged:
                         s, e = max(merged, key=lambda iv: iv[1] - iv[0])
                         longest[uid] = (int((e - s).total_seconds()), s, e)
             self.night_user[bar_date] = totals
             self.night_user_longest[bar_date] = longest
+            self.night_user_present[bar_date] = presence
+            self.night_user_alone[bar_date] = alone
 
         # Læg manuelle rettelser oveni nat-totalerne.
         for c in corrections:
@@ -292,6 +331,49 @@ class Engine:
     def qualifiers(self, bar_date: str) -> dict[int, int]:
         """Offentligt navn for de kvalificerede deltagere en given aften."""
         return self._qualifiers(bar_date)
+
+    def night_presence(self, bar_date: str) -> dict[int, int]:
+        """Rå tid i baren pr. bruger den aften – UDEN selskabskravet.
+
+        Bruges kun som tiebreaker for titler: den, der faktisk sad længst i
+        baren, skal ikke dele en titel med en, der gik tidligere. Manuelle
+        rettelser indgår ikke, da de hører til den optjente tid.
+        """
+        return dict(self.night_user_present.get(bar_date, {}))
+
+    def night_total(self, bar_date: str, user_id: int) -> int:
+        """Brugerens optjente nat-total inkl. eventuelle rettelser.
+
+        Det er præcis det tal, statistikken viser – i modsætning til summen af
+        rå sessionsvarigheder, som hverken tager højde for selskabskravet eller
+        for overlappende sessioner.
+        """
+        return self.night_user.get(bar_date, {}).get(user_id, 0)
+
+    def night_alone(self, bar_date: str) -> dict[int, int]:
+        """Tid i baren UDEN selskab pr. bruger den aften ("ventetid").
+
+        Tid i baren minus tid med selskab. Alle, der var i baren den aften, er
+        med – også dem der ikke kvalificerede sig, for den der sad helt alene
+        optjener netop ingen tid. Manuelle rettelser indgår ikke.
+        """
+        return dict(self.night_user_alone.get(bar_date, {}))
+
+    def alone_seconds(
+        self, user_id: int, start: Optional[str] = None, end: Optional[str] = None
+    ) -> int:
+        """Samlet ventetid for en bruger i en periode.
+
+        Tæller alle ikke-aflyste aftener – også dem hvor brugeren sad helt
+        alene, og natten derfor slet ikke blev en tællende torsdagsbar. Det er
+        jo netop de aftener, ventetiden handler om.
+        """
+        total = 0
+        for bar_date, per_user in self.night_user_alone.items():
+            if bar_date in self.cancelled or not self._in_period(bar_date, start, end):
+                continue
+            total += per_user.get(user_id, 0)
+        return total
 
     def night_arrivals(self, bar_date: str) -> dict[int, datetime]:
         """Tidligste ankomst pr. bruger den aften (rå tidsstempel, ikke gated)."""

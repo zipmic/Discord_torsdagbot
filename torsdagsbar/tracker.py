@@ -335,9 +335,10 @@ class VoiceTracker:
                 joined_at[s.user_id] = s.joined_at
                 channels[s.user_id] = s.channel_id
 
-        # Optjent tid = kun tid med selskab (samme regel som statistikken).
+        # Optjent tid = tid med selskab før åbning + al tid efter åbning
+        # (samme regel som statistikken).
         if self.config.require_company:
-            comp = companioned_night(user_intervals)
+            comp = companioned_night(user_intervals, self.schedule.open_of(bar_date))
             earned = {uid: v[0] for uid, v in comp.items()}
         else:
             earned = {

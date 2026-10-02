@@ -569,6 +569,36 @@ async def test_company_gating():
         eng_off = Engine(db.load_sessions(), db.load_nights(), db.load_corrections(),
                          cfg.min_seconds, require_company=False)
         check("uden krav: Alex' 5 solo-timer tæller", eng_off.night_user["2026-05-21"].get(4) == 5 * 3600)
+
+        # --- Med barens officielle åbning kl. 20:00 (sådan kører botten) ---
+        # Tiderne ovenfor er UTC; i maj er dansk tid UTC+2, så 17:00 UTC = 19:00.
+        def open_of(bar_date):
+            return cfg.schedule.open_of(date.fromisoformat(bar_date))
+
+        eng_open = Engine(db.load_sessions(), db.load_nights(), db.load_corrections(),
+                          cfg.min_seconds, require_company=True, open_of=open_of)
+        # Christian 19-23: alene 19-20 tæller ikke, 20-23 tæller (også alene) = 3t
+        check("åbning: Christian får 20-23 = 3t", eng_open.night_user["2026-05-14"].get(1) == 3 * 3600)
+        check("åbning: Emil får sine 30 min", eng_open.night_user["2026-05-14"].get(2) == 1800)
+        # Alex alene 19-24: 19-20 tæller ikke, 20-24 tæller = 4t
+        check("åbning: Alex alene får 20-24 = 4t", eng_open.night_user["2026-05-21"].get(4) == 4 * 3600)
+        check("åbning: Alex' solo-nat er nu tællende", "2026-05-21" in eng_open.counting_dates)
+        check("åbning: Alex på leaderboard", 4 in {r.user_id for r in eng_open.leaderboard("tid")})
+        # ⏳ ventetiden er stadig ren tid uden selskab – hele aftenen
+        check("åbning: Alex' ventetid er stadig 5t", eng_open.night_alone("2026-05-21").get(4) == 5 * 3600)
+        check("åbning: Christians ventetid 3t30m", eng_open.night_alone("2026-05-14").get(1) == 3 * 3600 + 1800)
+
+        # To der "åbner baren" før 20:00 får tiden med; selskab fortsætter
+        # alene efter 20:00 som ét sammenhængende stræk.
+        sess(5, "Bo", 28, 17, 15, 19, 0)    # 19:15-21:00 lokal
+        sess(6, "Kim", 28, 17, 15, 17, 45)  # 19:15-19:45 lokal
+        eng_open = Engine(db.load_sessions(), db.load_nights(), db.load_corrections(),
+                          cfg.min_seconds, require_company=True, open_of=open_of)
+        check("åbnede baren: Kim får 30 min før 20", eng_open.night_user["2026-05-28"].get(6) == 1800)
+        # Bo: 19:15-19:45 med Kim + 20:00-21:00 alene = 1t30m (19:45-20:00 alene tæller ikke)
+        check("åbnede baren: Bo får 1t30m", eng_open.night_user["2026-05-28"].get(5) == 5400)
+        check("Bos længste stræk er 20:00-21:00",
+              eng_open.night_user_longest["2026-05-28"][5][0] == 3600)
         db.close()
 
 
@@ -582,22 +612,49 @@ async def test_live_company_gating():
         chA = h.client.channels[CH_A]
         per = FakeMember(81, "SoloPer")
 
-        h.set_now(datetime(2026, 5, 14, 20, 0, tzinfo=TZ))
+        h.set_now(datetime(2026, 5, 14, 19, 10, tzinfo=TZ))
         await h.join(per, chA)
-        h.set_now(datetime(2026, 5, 14, 21, 0, tzinfo=TZ))  # 1 time alene
+        h.set_now(datetime(2026, 5, 14, 19, 50, tzinfo=TZ))  # 40 min alene FØR åbning
         status = await h.tracker.live_status()
         online = {o["user_id"]: o for o in status["online"]}
         check("SoloPer vises som online", 81 in online)
-        check("men optjent tid = 0 (ingen selskab)", online[81]["seconds"] == 0)
+        check("men optjent tid = 0 før 20:00 (ingen selskab)", online[81]["seconds"] == 0)
 
-        # Nu kommer en anden ind -> begge begynder at optjene
-        ven = FakeMember(82, "Ven")
-        await h.join(ven, chA)
-        h.set_now(datetime(2026, 5, 14, 21, 30, tzinfo=TZ))  # 30 min sammen
+        # Efter barens officielle åbning kl. 20:00 tæller tiden, også alene.
+        h.set_now(datetime(2026, 5, 14, 20, 30, tzinfo=TZ))
         status2 = await h.tracker.live_status()
         online2 = {o["user_id"]: o for o in status2["online"]}
-        check("SoloPer optjener nu 30 min (selskab)", online2[81]["seconds"] == 30 * 60)
-        check("Ven optjener 30 min", online2[82]["seconds"] == 30 * 60)
+        check("alene efter 20:00 tæller (30 min)", online2[81]["seconds"] == 30 * 60)
+
+        # Nu kommer en anden ind -> begge optjener
+        ven = FakeMember(82, "Ven")
+        await h.join(ven, chA)
+        h.set_now(datetime(2026, 5, 14, 21, 0, tzinfo=TZ))  # 30 min sammen
+        status3 = await h.tracker.live_status()
+        online3 = {o["user_id"]: o for o in status3["online"]}
+        check("SoloPer har nu 60 min (30 alene efter 20 + 30 sammen)", online3[81]["seconds"] == 60 * 60)
+        check("Ven optjener 30 min", online3[82]["seconds"] == 30 * 60)
+        db.close()
+
+
+async def test_live_open_bar_before_2000():
+    print("\n== Live: to der åbner baren før 20:00 får tiden med ==")
+    with tempfile.TemporaryDirectory() as d:
+        dbpath = Path(d) / "t.db"
+        cfg = make_config(dbpath)
+        db = Database(dbpath)
+        h = Harness(db, cfg)
+        chA = h.client.channels[CH_A]
+        a, b = FakeMember(91, "A"), FakeMember(92, "B")
+
+        h.set_now(datetime(2026, 5, 14, 19, 15, tzinfo=TZ))
+        await h.join(a, chA)
+        await h.join(b, chA)
+        h.set_now(datetime(2026, 5, 14, 19, 45, tzinfo=TZ))  # 30 min sammen før 20
+        status = await h.tracker.live_status()
+        online = {o["user_id"]: o for o in status["online"]}
+        check("A optjener 30 min før 20:00 (selskab)", online[91]["seconds"] == 30 * 60)
+        check("B optjener 30 min før 20:00 (selskab)", online[92]["seconds"] == 30 * 60)
         db.close()
 
 
@@ -614,6 +671,7 @@ async def main():
     await test_live_counts_in_leaderboard()
     await test_company_gating()
     await test_live_company_gating()
+    await test_live_open_bar_before_2000()
     print("\nALLE TORSDAGSBAR-TESTS BESTÅET ✅")
 
 
